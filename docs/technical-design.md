@@ -194,9 +194,8 @@ Benchmark:
 docker run --name realesrgan-gpu3 \
   --device nvidia.com/gpu=3 \
   -d --rm \
-  -e DATA_DIR=/data \
   -e GPU_ID=0 \
-  -v /data/jasna/ais0:/data \
+  -v /path/to/data:/data \
   open-beagle/video2x:latest
 ```
 
@@ -205,8 +204,8 @@ docker run --name realesrgan-gpu3 \
 多目录并行：
 
 ```text
-GPU 3 -> /data/jasna/ais0
-GPU 4 -> /data/jasna/ais1
+GPU 3 -> /path/to/data-shard-0
+GPU 4 -> /path/to/data-shard-1
 ```
 
 ## 9. 输出编码

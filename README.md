@@ -6,21 +6,21 @@
 
 ## 特点
 
-- 基于官方 Real-ESRGAN Python/CUDA 推理路线。
-- 默认使用 `RealESRGAN_x2plus` 处理真人/通用视频。
-- 720p 到 1080p 默认使用 `outscale=1.5`。
+- 默认使用 `RUNNER=trt-cuda` 高速路线。
+- 当前主路径为 `realesr-general-x4v3 + TensorRT FP16 + CUDA 后处理`。
+- 420p 到 1080p 已在 RTX 4090 上验证超过 30fps。
 - 递归扫描输入目录中的 `.mp4` 文件。
 - 自动跳过已是 1080p 及以上的视频。
 - 输出文件默认命名为 `*_1080p.mp4`。
 - 支持 benchmark 模式，用短样本估算完整视频耗时。
-- 支持通过 `tile` 参数缓解显存压力。
+- 运行入口只支持当前 TRT-CUDA 主线，避免误走旧 PyTorch 链路。
 
 ## 目标场景
 
-- 输入：720p、30fps 真人视频。
+- 输入：低于 1080p、30fps 真人视频。
 - 输出：最终 1080p 视频。
 - 硬件：单张 RTX 4090。
-- 目标：比旧 Video2X x4 路线更快，并尽量让瓶颈接近 GPU 推理本身。
+- 目标：2 小时视频在单张 RTX 4090 上 2 小时内完成，优先接近或超过实时。
 
 ## 运行
 
@@ -37,8 +37,8 @@ docker run --rm --gpus all \
 
 - 模型不打包进镜像。
 - 默认从 `/models` 读取权重。
-- 如果 `/models` 中缺少默认权重，容器运行时按需下载到 `/models`。
-- Real-ESRGAN Python 代码已经放在本项目 `vendor/realesrgan`，便于后续针对性能和日志做调整。
+- 高速默认路径需要 `/models/realesr-general-x4v3-420x720-fp16.engine`。
+- Real-ESRGAN Python 代码仅用于本地模型导出和对比实验，不进入默认运行链路。
 - 本项目自己的扫描、规划、模型、GPU 监控和运行编排代码放在 `src/`。
 
 只扫描和打印任务计划，不执行 AI 推理：
@@ -69,9 +69,10 @@ IMAGE_TAG=latest bash .beagle/build.sh
 - [用户画像](docs/user-personas.md)
 - [技术架构图](docs/architecture.md)
 - [项目计划](docs/plans.md)
+- [模型准备](docs/models.md)
 - [需求规格说明书](docs/requirements-specification.md)
 - [技术方案](docs/technical-design.md)
 
 ## 状态
 
-项目处于第一阶段实现中，当前重点是容器化、批处理入口、benchmark 和 720p 到 1080p 的性能验证。
+当前 `RUNNER=trt-cuda` 已接入主入口。420p 样本到 1080p 在 RTX 4090 上已验证 `48fps+`，下一步重点是流水线镜像验证、真正 5 分钟样本回归和 NVENC 编码修复。

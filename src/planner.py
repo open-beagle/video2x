@@ -23,15 +23,17 @@ def output_path(path: Path, suffix: str) -> Path:
 def choose_model(height: int, override: str) -> str:
     if override and override != "auto":
         return override
-    if 360 <= height < 540:
-        return "RealESRGAN_x4plus"
-    return "RealESRGAN_x2plus"
+    return "realesr-general-x4v3"
 
 
-def scale_for_height(height: int, target_height: int, override: str | None) -> float:
+def scale_for_height(width: int, height: int, target_height: int, override: str | None) -> float:
     if override:
         return float(override)
-    return target_height / height
+
+    target_width = round(width * target_height / height)
+    if target_width % 2:
+        target_width += 1
+    return (target_width + 0.01) / width
 
 
 def should_skip_output(path: Path, skip_existing: bool) -> bool:

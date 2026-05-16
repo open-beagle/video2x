@@ -81,7 +81,9 @@ def probe_video(path: Path) -> VideoInfo:
     )
 
 
-def validate_height(path: Path, expected_height: int) -> None:
+def validate_dimensions(path: Path, expected_width: int, expected_height: int) -> None:
     info = probe_video(path)
+    if info.width != expected_width:
+        raise RuntimeError(f"output width {info.width} != {expected_width}: {path}")
     if info.height != expected_height:
         raise RuntimeError(f"output height {info.height} != {expected_height}: {path}")
