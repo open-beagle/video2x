@@ -12,13 +12,10 @@ from pathlib import Path
 import numpy as np
 import tensorrt as trt
 from cuda.bindings import driver as cu
-from cuda.bindings import nvrtc
 from cuda.bindings import runtime as cudart
 
 
 KERNEL = r"""
-#include <cuda_fp16.h>
-
 extern "C" __global__
 void chw_float_to_rgb8_resize_pad(
     const float* __restrict__ src,
@@ -70,9 +67,37 @@ void chw_float_to_rgb8_resize_pad(
     }
 }
 
+static __device__ __forceinline__
+float half_bits_to_float(unsigned short h) {
+    unsigned int sign = ((unsigned int)h & 0x8000u) << 16;
+    unsigned int exp = ((unsigned int)h & 0x7c00u) >> 10;
+    unsigned int mant = (unsigned int)h & 0x03ffu;
+    unsigned int out;
+
+    if (exp == 0) {
+        if (mant == 0) {
+            out = sign;
+        } else {
+            exp = 1;
+            while ((mant & 0x0400u) == 0) {
+                mant <<= 1;
+                exp--;
+            }
+            mant &= 0x03ffu;
+            out = sign | ((exp + 112u) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        out = sign | 0x7f800000u | (mant << 13);
+    } else {
+        out = sign | ((exp + 112u) << 23) | (mant << 13);
+    }
+
+    return __uint_as_float(out);
+}
+
 extern "C" __global__
 void chw_half_to_rgb8_resize_pad(
-    const half* __restrict__ src,
+    const unsigned short* __restrict__ src,
     unsigned char* __restrict__ dst,
     int src_w,
     int src_h,
@@ -108,11 +133,11 @@ void chw_half_to_rgb8_resize_pad(
 
     int plane = src_w * src_h;
     for (int c = 0; c < 3; ++c) {
-        const half* p = src + c * plane;
-        float v00 = __half2float(p[y0 * src_w + x0]);
-        float v01 = __half2float(p[y0 * src_w + x1]);
-        float v10 = __half2float(p[y1 * src_w + x0]);
-        float v11 = __half2float(p[y1 * src_w + x1]);
+        const unsigned short* p = src + c * plane;
+        float v00 = half_bits_to_float(p[y0 * src_w + x0]);
+        float v01 = half_bits_to_float(p[y0 * src_w + x1]);
+        float v10 = half_bits_to_float(p[y1 * src_w + x0]);
+        float v11 = half_bits_to_float(p[y1 * src_w + x1]);
         float v0 = v00 + (v01 - v00) * fx;
         float v1 = v10 + (v11 - v10) * fx;
         float v = v0 + (v1 - v0) * fy;
@@ -165,7 +190,7 @@ float sample_chw_pixel(
 
 static __device__ __forceinline__
 float sample_chw_half_pixel(
-    const half* __restrict__ src,
+    const unsigned short* __restrict__ src,
     int src_w,
     int src_h,
     int dst_w,
@@ -194,11 +219,11 @@ float sample_chw_half_pixel(
     if (y1 >= src_h) y1 = src_h - 1;
 
     int plane = src_w * src_h;
-    const half* p = src + c * plane;
-    float v00 = __half2float(p[y0 * src_w + x0]);
-    float v01 = __half2float(p[y0 * src_w + x1]);
-    float v10 = __half2float(p[y1 * src_w + x0]);
-    float v11 = __half2float(p[y1 * src_w + x1]);
+    const unsigned short* p = src + c * plane;
+    float v00 = half_bits_to_float(p[y0 * src_w + x0]);
+    float v01 = half_bits_to_float(p[y0 * src_w + x1]);
+    float v10 = half_bits_to_float(p[y1 * src_w + x0]);
+    float v11 = half_bits_to_float(p[y1 * src_w + x1]);
     float v0 = v00 + (v01 - v00) * fx;
     float v1 = v10 + (v11 - v10) * fx;
     float v = v0 + (v1 - v0) * fy;
@@ -213,7 +238,7 @@ unsigned char clamp_u8(float v) {
 
 extern "C" __global__
 void chw_half_to_nv12_resize_pad(
-    const half* __restrict__ src,
+    const unsigned short* __restrict__ src,
     unsigned char* __restrict__ dst,
     int src_w,
     int src_h,
@@ -315,17 +340,6 @@ def check_driver(result, label: str):
     return result[1:]
 
 
-def check_nvrtc(result, label: str):
-    err = result[0]
-    if err != nvrtc.nvrtcResult.NVRTC_SUCCESS:
-        raise RuntimeError(f"{label} failed: {err}")
-    if len(result) == 1:
-        return None
-    if len(result) == 2:
-        return result[1]
-    return result[1:]
-
-
 def dtype_to_np(dtype: trt.DataType):
     if dtype == trt.DataType.FLOAT:
         return np.float32
@@ -338,24 +352,15 @@ def tensor_nbytes(shape: tuple[int, ...], dtype: trt.DataType) -> int:
     return math.prod(shape) * np.dtype(dtype_to_np(dtype)).itemsize
 
 
+def kernel_ptx_path() -> Path:
+    return Path(__file__).resolve().with_name("postprocess.ptx")
+
+
 def compile_kernel() -> dict[tuple[str, str], cu.CUfunction]:
-    program = check_nvrtc(nvrtc.nvrtcCreateProgram(KERNEL.encode(), b"postprocess.cu", 0, None, None), "nvrtcCreateProgram")
-    options = [
-        b"--std=c++17",
-        b"--use_fast_math",
-        b"--gpu-architecture=compute_89",
-        b"--include-path=/usr/local/cuda/include",
-    ]
-    result = nvrtc.nvrtcCompileProgram(program, len(options), options)
-    if result[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
-        log_size = check_nvrtc(nvrtc.nvrtcGetProgramLogSize(program), "nvrtcGetProgramLogSize")
-        log = bytearray(log_size)
-        nvrtc.nvrtcGetProgramLog(program, log)
-        raise RuntimeError(log.decode(errors="replace"))
-    ptx_size = check_nvrtc(nvrtc.nvrtcGetPTXSize(program), "nvrtcGetPTXSize")
-    ptx = bytearray(ptx_size)
-    check_nvrtc(nvrtc.nvrtcGetPTX(program, ptx), "nvrtcGetPTX")
-    module = check_driver(cu.cuModuleLoadData(bytes(ptx)), "cuModuleLoadData")
+    ptx_path = kernel_ptx_path()
+    if not ptx_path.exists():
+        raise RuntimeError(f"precompiled CUDA kernel not found: {ptx_path}")
+    module = check_driver(cu.cuModuleLoadData(ptx_path.read_bytes()), "cuModuleLoadData")
     return {
         ("float", "rgb24"): check_driver(
             cu.cuModuleGetFunction(module, b"chw_float_to_rgb8_resize_pad"),

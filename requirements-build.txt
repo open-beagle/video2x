@@ -1,0 +1,11 @@
+basicsr
+cuda-python
+facexlib
+gfpgan
+numpy
+onnx
+onnxscript
+opencv-python-headless
+Pillow
+tensorrt
+tqdm

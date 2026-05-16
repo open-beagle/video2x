@@ -22,7 +22,8 @@ if [[ "${VIDEO_ENCODER:-}" == "hevc_nvenc" || "${VIDEO_ENCODER:-}" == "h264_nven
     exit 1
   fi
 
-  if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "${VIDEO_ENCODER}"; then
+  encoders="$(ffmpeg -hide_banner -encoders 2>/dev/null || true)"
+  if ! grep -q "${VIDEO_ENCODER}" <<< "${encoders}"; then
     echo "ERROR: ffmpeg encoder not available: ${VIDEO_ENCODER}" >&2
     exit 1
   fi
