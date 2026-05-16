@@ -1,0 +1,54 @@
+name: video2x
+
+on:
+  push:
+    branches:
+      - release
+
+env:
+  BUILD_VERSION: "13.0.3"
+  VIDEO2X_VERSION: "v0.1.0"
+  IMAGE_NAME: registry.cn-qingdao.aliyuncs.com/wod/video2x
+
+jobs:
+  video2x-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo docker image prune --all --force
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-qingdao.aliyuncs.com
+          username: ${{ secrets.REGISTRY_USER_ALIYUN }}
+          password: ${{ secrets.REGISTRY_PASSWORD_ALIYUN }}
+
+      - name: Build and push video2x runtime image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./.beagle/dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }}
+            ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            BASE=nvidia/cuda:${{ env.BUILD_VERSION }}-runtime-ubuntu24.04
+            AUTHOR=${{ github.repository_owner }}
+            VERSION=${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }}
+
+      - name: Build complete
+        run: echo "video2x ${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }} pushed successfully to Aliyun!"
