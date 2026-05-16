@@ -43,6 +43,15 @@ MODEL_CONFIGS = {
         "num_grow_ch": 32,
         "scale": 2,
     },
+    "RealESRGAN_x4plus": {
+        "arch": "rrdbnet",
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 64,
+        "num_block": 23,
+        "num_grow_ch": 32,
+        "scale": 4,
+    },
     "realesr-general-x4v3": {
         "arch": "srvgg",
         "num_in_ch": 3,
