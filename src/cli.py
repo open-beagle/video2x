@@ -40,6 +40,7 @@ def main() -> int:
     trt_engine_override = os.environ.get("TRT_ENGINE_PATH") or None
     video_encoder = os.environ.get("VIDEO_ENCODER", "libx265")
     video_bitrate = os.environ.get("VIDEO_BITRATE", "5M")
+    video_pixel_format = os.environ.get("VIDEO_PIXEL_FORMAT") or None
     trt_cuda_tool = Path(os.environ.get("TRT_CUDA_TOOL", "/app/tools/trt_cuda_video_runner.py"))
 
     if not data_dir.is_dir():
@@ -64,6 +65,7 @@ def main() -> int:
     print(f"TRT_ENGINE_PATH={trt_engine_override or 'auto'}", flush=True)
     print(f"VIDEO_ENCODER={video_encoder}", flush=True)
     print(f"VIDEO_BITRATE={video_bitrate}", flush=True)
+    print(f"VIDEO_PIXEL_FORMAT={video_pixel_format or 'auto'}", flush=True)
     print(f"TRT_CUDA_TOOL={trt_cuda_tool}", flush=True)
     print(f"GPU_STATUS={gpu_status()}", flush=True)
 
@@ -151,6 +153,7 @@ def main() -> int:
             benchmark_frames,
             video_encoder,
             video_bitrate,
+            video_pixel_format,
             trt_cuda_tool,
         )
 

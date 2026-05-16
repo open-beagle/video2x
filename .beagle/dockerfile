@@ -8,7 +8,7 @@ LABEL maintainer=${AUTHOR} version=${VERSION}
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
-    NVIDIA_DRIVER_CAPABILITIES=all \
+    NVIDIA_DRIVER_CAPABILITIES=video,compute,utility \
     DATA_DIR=/data \
     TARGET_WIDTH=1920 \
     TARGET_HEIGHT=1080 \
@@ -16,11 +16,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TILE=0 \
     GPU_ID=0 \
     RUNNER=trt-cuda \
-    VIDEO_ENCODER=libx265 \
+    VIDEO_ENCODER=hevc_nvenc \
     VIDEO_BITRATE=5M \
+    VIDEO_PIXEL_FORMAT=nv12 \
     OUTPUT_SUFFIX=_1080p \
     SKIP_EXISTING=true \
     MODEL_DIR=/models \
+    LD_PRELOAD=/opt/hooks/nvenc_ioctl_hook.so \
+    NVENC_GPU_INDEX=0 \
     TRT_CUDA_TOOL=/app/tools/trt_cuda_video_runner.py
 
 RUN apt-get clean \
@@ -52,6 +55,7 @@ WORKDIR /app
 
 COPY src /app/src
 COPY tools /app/tools
+COPY .beagle/hooks/nvenc_ioctl_hook.so /opt/hooks/nvenc_ioctl_hook.so
 
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
         cuda-python numpy tensorrt \
@@ -62,7 +66,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY .beagle/entrypoint.sh /usr/local/bin/video2x-entrypoint
-RUN chmod +x /usr/local/bin/video2x-entrypoint
+RUN chmod +x /usr/local/bin/video2x-entrypoint /opt/hooks/nvenc_ioctl_hook.so
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/video2x-entrypoint"]

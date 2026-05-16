@@ -30,6 +30,7 @@ def run_trt_cuda_task(
     benchmark_frames: str | None,
     video_encoder: str,
     video_bitrate: str,
+    video_pixel_format: str | None,
     tool_path: Path,
 ) -> None:
     if not engine_path.exists():
@@ -40,9 +41,12 @@ def run_trt_cuda_task(
     frames_arg: list[str] = []
     if benchmark_frames:
         frames_arg = ["--frames", benchmark_frames]
+    elif task.info.frames:
+        frames_arg = ["--expected-frames", str(task.info.frames)]
 
     decode_width, decode_height = _decode_size(task.info.width, task.info.height)
     content_width = _content_width(task.info.width, task.info.height, target_height)
+    output_pix_fmt = video_pixel_format or ("nv12" if video_encoder in {"h264_nvenc", "hevc_nvenc"} else "rgb24")
     cmd = [
         sys.executable,
         str(tool_path),
@@ -72,6 +76,8 @@ def run_trt_cuda_task(
         video_encoder,
         "--bitrate",
         video_bitrate,
+        "--output-pix-fmt",
+        output_pix_fmt,
         *frames_arg,
     ]
 
@@ -79,7 +85,7 @@ def run_trt_cuda_task(
     print(
         f"Start TRT-CUDA: input={task.input} output={task.output} "
         f"engine={engine_path} decode={decode_width}x{decode_height} "
-        f"content_width={content_width} encoder={video_encoder} bitrate={video_bitrate}",
+        f"content_width={content_width} encoder={video_encoder} bitrate={video_bitrate} pix_fmt={output_pix_fmt}",
         flush=True,
     )
     subprocess.run(cmd, env=env, check=True)

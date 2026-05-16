@@ -7,8 +7,8 @@
 ## 特点
 
 - 默认使用 `RUNNER=trt-cuda` 高速路线。
-- 当前主路径为 `realesr-general-x4v3 + TensorRT FP16 + CUDA 后处理`。
-- 420p 到 1080p 已在 RTX 4090 上验证超过 30fps。
+- 当前主路径为 `realesr-general-x4v3 + TensorRT FP16 + CUDA NV12 + HEVC NVENC`。
+- 420p/720p 到 1080p 已在 RTX 4090 上验证超过 30fps。
 - 递归扫描输入目录中的 `.mp4` 文件。
 - 自动跳过已是 1080p 及以上的视频。
 - 输出文件默认命名为 `*_1080p.mp4`。
@@ -27,11 +27,14 @@
 默认运行方式：
 
 ```bash
-docker run --rm --gpus all \
+docker run --rm \
+  --device nvidia.com/gpu=0 \
   -v /path/to/data:/data \
   -v /path/to/models:/models \
   video2x
 ```
+
+默认编码为 `hevc_nvenc`，镜像内置 NVENC hook。运行时需要使用 NVIDIA CDI GPU 设备，并保持 `NVENC_GPU_INDEX` 与 GPU 编号一致；默认值为 `0`。
 
 模型目录说明：
 
@@ -75,4 +78,4 @@ IMAGE_TAG=latest bash .beagle/build.sh
 
 ## 状态
 
-当前 `RUNNER=trt-cuda` 已接入主入口。420p 样本到 1080p 在 RTX 4090 上已验证 `48fps+`，下一步重点是流水线镜像验证、真正 5 分钟样本回归和 NVENC 编码修复。
+当前 `CUDA NV12 + HEVC NVENC` 完整 5 分钟样本回归已通过：420p `72fps+`，720p `46fps+`。人工画质评审结论为“尚可”，下一步重点是真正 Zero-Copy 管线。

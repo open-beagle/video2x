@@ -67,6 +67,94 @@ void chw_float_to_rgb8_resize_pad(
         dst[dst_idx + c] = (unsigned char)(v * 255.0f + 0.5f);
     }
 }
+
+static __device__ __forceinline__
+float sample_chw_pixel(
+    const float* __restrict__ src,
+    int src_w,
+    int src_h,
+    int dst_w,
+    int dst_h,
+    int content_w,
+    int pad_left,
+    int x,
+    int y,
+    int c
+) {
+    if (x < pad_left || x >= pad_left + content_w) {
+        return 0.0f;
+    }
+
+    float sx = ((float)(x - pad_left) + 0.5f) * ((float)src_w / (float)content_w) - 0.5f;
+    float sy = ((float)y + 0.5f) * ((float)src_h / (float)dst_h) - 0.5f;
+    int x0 = (int)floorf(sx);
+    int y0 = (int)floorf(sy);
+    float fx = sx - (float)x0;
+    float fy = sy - (float)y0;
+    if (x0 < 0) { x0 = 0; fx = 0.0f; }
+    if (y0 < 0) { y0 = 0; fy = 0.0f; }
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    if (x1 >= src_w) x1 = src_w - 1;
+    if (y1 >= src_h) y1 = src_h - 1;
+
+    int plane = src_w * src_h;
+    const float* p = src + c * plane;
+    float v00 = p[y0 * src_w + x0];
+    float v01 = p[y0 * src_w + x1];
+    float v10 = p[y1 * src_w + x0];
+    float v11 = p[y1 * src_w + x1];
+    float v0 = v00 + (v01 - v00) * fx;
+    float v1 = v10 + (v11 - v10) * fx;
+    float v = v0 + (v1 - v0) * fy;
+    return fminf(fmaxf(v, 0.0f), 1.0f);
+}
+
+static __device__ __forceinline__
+unsigned char clamp_u8(float v) {
+    v = fminf(fmaxf(v, 0.0f), 255.0f);
+    return (unsigned char)(v + 0.5f);
+}
+
+extern "C" __global__
+void chw_float_to_nv12_resize_pad(
+    const float* __restrict__ src,
+    unsigned char* __restrict__ dst,
+    int src_w,
+    int src_h,
+    int dst_w,
+    int dst_h,
+    int content_w,
+    int pad_left
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= dst_w || y >= dst_h) return;
+
+    float r = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, x, y, 0) * 255.0f;
+    float g = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, x, y, 1) * 255.0f;
+    float b = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, x, y, 2) * 255.0f;
+    dst[y * dst_w + x] = clamp_u8(0.257f * r + 0.504f * g + 0.098f * b + 16.0f);
+
+    if ((x & 1) == 0 && (y & 1) == 0) {
+        float u_sum = 0.0f;
+        float v_sum = 0.0f;
+        for (int oy = 0; oy < 2; ++oy) {
+            for (int ox = 0; ox < 2; ++ox) {
+                int px = min(x + ox, dst_w - 1);
+                int py = min(y + oy, dst_h - 1);
+                float sr = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, px, py, 0) * 255.0f;
+                float sg = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, px, py, 1) * 255.0f;
+                float sb = sample_chw_pixel(src, src_w, src_h, dst_w, dst_h, content_w, pad_left, px, py, 2) * 255.0f;
+                u_sum += -0.148f * sr - 0.291f * sg + 0.439f * sb + 128.0f;
+                v_sum += 0.439f * sr - 0.368f * sg - 0.071f * sb + 128.0f;
+            }
+        }
+        int uv_idx = dst_w * dst_h + (y / 2) * dst_w + x;
+        dst[uv_idx] = clamp_u8(u_sum * 0.25f);
+        dst[uv_idx + 1] = clamp_u8(v_sum * 0.25f);
+    }
+}
 """
 
 
@@ -115,7 +203,7 @@ def tensor_nbytes(shape: tuple[int, ...], dtype: trt.DataType) -> int:
     return math.prod(shape) * np.dtype(dtype_to_np(dtype)).itemsize
 
 
-def compile_kernel() -> cu.CUfunction:
+def compile_kernel() -> tuple[cu.CUfunction, cu.CUfunction]:
     program = check_nvrtc(nvrtc.nvrtcCreateProgram(KERNEL.encode(), b"postprocess.cu", 0, None, None), "nvrtcCreateProgram")
     options = [b"--std=c++17", b"--use_fast_math", b"--gpu-architecture=compute_89"]
     result = nvrtc.nvrtcCompileProgram(program, len(options), options)
@@ -128,7 +216,9 @@ def compile_kernel() -> cu.CUfunction:
     ptx = bytearray(ptx_size)
     check_nvrtc(nvrtc.nvrtcGetPTX(program, ptx), "nvrtcGetPTX")
     module = check_driver(cu.cuModuleLoadData(bytes(ptx)), "cuModuleLoadData")
-    return check_driver(cu.cuModuleGetFunction(module, b"chw_float_to_rgb8_resize_pad"), "cuModuleGetFunction")
+    rgb_kernel = check_driver(cu.cuModuleGetFunction(module, b"chw_float_to_rgb8_resize_pad"), "cuModuleGetFunction rgb")
+    nv12_kernel = check_driver(cu.cuModuleGetFunction(module, b"chw_float_to_nv12_resize_pad"), "cuModuleGetFunction nv12")
+    return rgb_kernel, nv12_kernel
 
 
 def parse_args() -> argparse.Namespace:
@@ -142,11 +232,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decode-height", type=int, default=0)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--frames", type=int, default=0)
+    parser.add_argument("--expected-frames", type=int, default=0)
     parser.add_argument("--target-width", type=int, default=1920)
     parser.add_argument("--target-height", type=int, default=1080)
     parser.add_argument("--content-width", type=int, default=1852)
     parser.add_argument("--encoder", default="libx265")
     parser.add_argument("--bitrate", default="5M")
+    parser.add_argument("--output-pix-fmt", choices=["rgb24", "nv12"], default="rgb24")
     return parser.parse_args()
 
 
@@ -189,7 +281,7 @@ def main() -> int:
     args = parse_args()
     check_driver(cu.cuInit(0), "cuInit")
     check_cuda(cudart.cudaSetDevice(0), "cudaSetDevice")
-    kernel = compile_kernel()
+    rgb_kernel, nv12_kernel = compile_kernel()
 
     logger = trt.Logger(trt.Logger.WARNING)
     runtime = trt.Runtime(logger)
@@ -220,19 +312,21 @@ def main() -> int:
 
     input_bytes = tensor_nbytes(input_shape, input_dtype)
     output_bytes = tensor_nbytes(output_shape, output_dtype)
-    rgb_bytes = args.target_width * args.target_height * 3
+    frame_bytes = args.target_width * args.target_height * (3 if args.output_pix_fmt == "rgb24" else 3 // 2)
+    if args.output_pix_fmt == "nv12":
+        frame_bytes = args.target_width * args.target_height * 3 // 2
     raw_in_bytes = decode_width * decode_height * 3
     src_h = output_shape[2]
     src_w = output_shape[3]
     pad_left = (args.target_width - args.content_width) // 2
 
     host_input = np.empty(input_shape, dtype=dtype_to_np(input_dtype))
-    host_rgb = np.empty((args.target_height, args.target_width, 3), dtype=np.uint8)
+    host_frame = np.empty(frame_bytes, dtype=np.uint8)
 
     stream = check_cuda(cudart.cudaStreamCreate(), "cudaStreamCreate")
     d_input = check_cuda(cudart.cudaMalloc(input_bytes), "cudaMalloc input")
     d_output = check_cuda(cudart.cudaMalloc(output_bytes), "cudaMalloc output")
-    d_rgb = check_cuda(cudart.cudaMalloc(rgb_bytes), "cudaMalloc rgb")
+    d_frame = check_cuda(cudart.cudaMalloc(frame_bytes), "cudaMalloc frame")
     context.set_tensor_address(input_name, int(d_input))
     context.set_tensor_address(output_name, int(d_output))
 
@@ -252,6 +346,7 @@ def main() -> int:
         if decode_width != args.input_width or decode_height != args.input_height:
             decode_cmd += ["-vf", f"scale={decode_width}:{decode_height}:flags=bicubic"]
         decode_cmd += [
+            "-nostdin",
             "-pix_fmt",
             "rgb24",
             "-f",
@@ -267,7 +362,7 @@ def main() -> int:
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            args.output_pix_fmt,
             "-s",
             f"{args.target_width}x{args.target_height}",
             "-r",
@@ -290,14 +385,15 @@ def main() -> int:
             encode_cmd += ["-preset", "p1", "-tune", "ull"]
         encode_cmd += ["-pix_fmt", "yuv420p", str(no_audio)]
 
-        decoder = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE)
+        decoder = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         encoder = subprocess.Popen(encode_cmd, stdin=subprocess.PIPE)
         started = time.time()
         frames = 0
         decode_time = preprocess_time = h2d_time = infer_time = kernel_time = d2h_time = encode_time = 0.0
+        frame_limit = args.frames or args.expected_frames
         try:
             while True:
-                if args.frames and frames >= args.frames:
+                if frame_limit and frames >= frame_limit:
                     break
                 t0 = time.perf_counter()
                 chunk = decoder.stdout.read(raw_in_bytes) if decoder.stdout else b""
@@ -334,7 +430,7 @@ def main() -> int:
 
                 params = [
                     ctypes.c_void_p(int(d_output)),
-                    ctypes.c_void_p(int(d_rgb)),
+                    ctypes.c_void_p(int(d_frame)),
                     ctypes.c_int(src_w),
                     ctypes.c_int(src_h),
                     ctypes.c_int(args.target_width),
@@ -347,7 +443,7 @@ def main() -> int:
                 t0 = time.perf_counter()
                 check_driver(
                     cu.cuLaunchKernel(
-                        kernel,
+                        nv12_kernel if args.output_pix_fmt == "nv12" else rgb_kernel,
                         math.ceil(args.target_width / 16),
                         math.ceil(args.target_height / 16),
                         1,
@@ -367,13 +463,13 @@ def main() -> int:
                 t0 = time.perf_counter()
                 check_cuda(
                     cudart.cudaMemcpyAsync(
-                        host_rgb.ctypes.data,
-                        d_rgb,
-                        rgb_bytes,
+                        host_frame.ctypes.data,
+                        d_frame,
+                        frame_bytes,
                         cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
                         stream,
                     ),
-                    "D2H rgb",
+                    "D2H frame",
                 )
                 check_cuda(cudart.cudaStreamSynchronize(stream), "sync d2h")
                 d2h_time += time.perf_counter() - t0
@@ -381,7 +477,7 @@ def main() -> int:
                 t0 = time.perf_counter()
                 if not encoder.stdin:
                     raise RuntimeError("encoder stdin closed")
-                encoder.stdin.write(host_rgb.tobytes())
+                encoder.stdin.write(host_frame.tobytes())
                 encode_time += time.perf_counter() - t0
                 frames += 1
         finally:
@@ -394,7 +490,7 @@ def main() -> int:
 
         if encoder.returncode != 0:
             raise RuntimeError(f"ffmpeg encode failed: {encoder.returncode}")
-        if decoder.returncode != 0 and not (args.frames and frames >= args.frames):
+        if decoder.returncode != 0 and not (frame_limit and frames >= frame_limit):
             raise RuntimeError(f"ffmpeg decode failed: {decoder.returncode}")
 
         merge_started = time.perf_counter()
@@ -405,13 +501,13 @@ def main() -> int:
     print(f"frames={frames} elapsed={elapsed:.3f}s fps={frames / elapsed:.3f}")
     print(
         f"decode={decode_time:.3f}s preprocess={preprocess_time:.3f}s h2d={h2d_time:.3f}s "
-        f"infer={infer_time:.3f}s kernel={kernel_time:.3f}s d2h_rgb={d2h_time:.3f}s "
+        f"infer={infer_time:.3f}s kernel={kernel_time:.3f}s d2h_frame={d2h_time:.3f}s "
         f"encode_write={encode_time:.3f}s merge_audio={merge_time:.3f}s"
     )
 
     check_cuda(cudart.cudaFree(d_input), "free input")
     check_cuda(cudart.cudaFree(d_output), "free output")
-    check_cuda(cudart.cudaFree(d_rgb), "free rgb")
+    check_cuda(cudart.cudaFree(d_frame), "free frame")
     if not args.output.exists():
         shutil.copy2(no_audio, args.output)
     return 0
