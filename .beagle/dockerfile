@@ -82,7 +82,6 @@ ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility \
     SKIP_EXISTING=true \
     MODEL_DIR=/models \
     LD_PRELOAD=/opt/hooks/nvenc_ioctl_hook.so \
-    NVENC_GPU_INDEX=0 \
     TRT_CUDA_TOOL=/app/src/worker.py
 
 WORKDIR /workspace

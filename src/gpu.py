@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 
 def gpu_status() -> str:
+    env = os.environ.copy()
+    env.pop("LD_PRELOAD", None)
     try:
         completed = subprocess.run(
             [
@@ -13,6 +16,7 @@ def gpu_status() -> str:
             ],
             check=True,
             capture_output=True,
+            env=env,
             text=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
