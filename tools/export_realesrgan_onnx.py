@@ -29,11 +29,22 @@ def ensure_torchvision_functional_tensor() -> None:
 
 ensure_torchvision_functional_tensor()
 
+from basicsr.archs.rrdbnet_arch import RRDBNet  # noqa: E402
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact  # noqa: E402
 
 
 MODEL_CONFIGS = {
+    "RealESRGAN_x2plus": {
+        "arch": "rrdbnet",
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 64,
+        "num_block": 23,
+        "num_grow_ch": 32,
+        "scale": 2,
+    },
     "realesr-general-x4v3": {
+        "arch": "srvgg",
         "num_in_ch": 3,
         "num_out_ch": 3,
         "num_feat": 64,
@@ -42,6 +53,7 @@ MODEL_CONFIGS = {
         "act_type": "prelu",
     },
     "realesr-general-wdn-x4v3": {
+        "arch": "srvgg",
         "num_in_ch": 3,
         "num_out_ch": 3,
         "num_feat": 64,
@@ -50,6 +62,16 @@ MODEL_CONFIGS = {
         "act_type": "prelu",
     },
 }
+
+
+def build_model(name: str) -> torch.nn.Module:
+    config = MODEL_CONFIGS[name].copy()
+    arch = config.pop("arch")
+    if arch == "rrdbnet":
+        return RRDBNet(**config)
+    if arch == "srvgg":
+        return SRVGGNetCompact(**config)
+    raise ValueError(f"unsupported model arch: {arch}")
 
 
 def parse_shape(value: str) -> tuple[int, int, int, int]:
@@ -83,7 +105,7 @@ def main() -> int:
     parser.add_argument("--dynamic", action="store_true", help="export dynamic H/W axes")
     args = parser.parse_args()
 
-    model = SRVGGNetCompact(**MODEL_CONFIGS[args.model])
+    model = build_model(args.model)
     state_dict = load_weights(args.weights)
     model.load_state_dict(state_dict, strict=True)
     model.eval()

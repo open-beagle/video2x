@@ -138,13 +138,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--input-width", type=int, default=720)
     parser.add_argument("--input-height", type=int, default=420)
+    parser.add_argument("--decode-width", type=int, default=0)
+    parser.add_argument("--decode-height", type=int, default=0)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--frames", type=int, default=0)
     parser.add_argument("--target-width", type=int, default=1920)
     parser.add_argument("--target-height", type=int, default=1080)
     parser.add_argument("--content-width", type=int, default=1852)
-    parser.add_argument("--encoder", default="libx264")
+    parser.add_argument("--encoder", default="libx265")
+    parser.add_argument("--bitrate", default="5M")
     return parser.parse_args()
+
+
+def doubled_bitrate(value: str) -> str:
+    if len(value) > 1 and value[-1].isalpha() and value[:-1].isdigit():
+        return f"{int(value[:-1]) * 2}{value[-1]}"
+    if value.isdigit():
+        return str(int(value) * 2)
+    return value
 
 
 def merge_audio(input_path: Path, video_path: Path, output_path: Path) -> None:
@@ -200,15 +211,17 @@ def main() -> int:
     output_shape = tuple(engine.get_tensor_shape(output_name))
     input_dtype = engine.get_tensor_dtype(input_name)
     output_dtype = engine.get_tensor_dtype(output_name)
-    if input_shape != (1, 3, args.input_height, args.input_width):
-        raise RuntimeError(f"engine input shape {input_shape} does not match {args.input_width}x{args.input_height}")
+    decode_width = args.decode_width or args.input_width
+    decode_height = args.decode_height or args.input_height
+    if input_shape != (1, 3, decode_height, decode_width):
+        raise RuntimeError(f"engine input shape {input_shape} does not match decode size {decode_width}x{decode_height}")
     if output_dtype != trt.DataType.FLOAT:
         raise RuntimeError(f"kernel expects FP32 TRT output, got {output_dtype}")
 
     input_bytes = tensor_nbytes(input_shape, input_dtype)
     output_bytes = tensor_nbytes(output_shape, output_dtype)
     rgb_bytes = args.target_width * args.target_height * 3
-    raw_in_bytes = args.input_width * args.input_height * 3
+    raw_in_bytes = decode_width * decode_height * 3
     src_h = output_shape[2]
     src_w = output_shape[3]
     pad_left = (args.target_width - args.content_width) // 2
@@ -235,6 +248,10 @@ def main() -> int:
             str(args.input),
             "-map",
             "0:v:0",
+        ]
+        if decode_width != args.input_width or decode_height != args.input_height:
+            decode_cmd += ["-vf", f"scale={decode_width}:{decode_height}:flags=bicubic"]
+        decode_cmd += [
             "-pix_fmt",
             "rgb24",
             "-f",
@@ -261,9 +278,15 @@ def main() -> int:
             "-c:v",
             args.encoder,
         ]
-        if args.encoder == "libx264":
-            encode_cmd += ["-preset", "ultrafast", "-crf", "18"]
-        elif args.encoder == "h264_nvenc":
+        if args.bitrate:
+            encode_cmd += ["-b:v", args.bitrate, "-maxrate", args.bitrate, "-bufsize", doubled_bitrate(args.bitrate)]
+        elif args.encoder in {"libx264", "libx265"}:
+            encode_cmd += ["-crf", "18"]
+        if args.encoder in {"libx264", "libx265"}:
+            encode_cmd += ["-preset", "ultrafast"]
+            if args.encoder == "libx265":
+                encode_cmd += ["-x265-params", "log-level=error"]
+        elif args.encoder in {"h264_nvenc", "hevc_nvenc"}:
             encode_cmd += ["-preset", "p1", "-tune", "ull"]
         encode_cmd += ["-pix_fmt", "yuv420p", str(no_audio)]
 
@@ -285,7 +308,7 @@ def main() -> int:
                     raise RuntimeError(f"incomplete input frame: {len(chunk)} != {raw_in_bytes}")
 
                 t0 = time.perf_counter()
-                frame = np.frombuffer(chunk, dtype=np.uint8).reshape((args.input_height, args.input_width, 3))
+                frame = np.frombuffer(chunk, dtype=np.uint8).reshape((decode_height, decode_width, 3))
                 host_input[0] = np.transpose(frame.astype(np.float32) / 255.0, (2, 0, 1))
                 preprocess_time += time.perf_counter() - t0
 

@@ -16,6 +16,12 @@ def _content_width(input_width: int, input_height: int, target_height: int) -> i
     return width
 
 
+def _decode_size(input_width: int, input_height: int) -> tuple[int, int]:
+    if input_width == 1280 and input_height == 720:
+        return 960, 540
+    return input_width, input_height
+
+
 def run_trt_cuda_task(
     task: Task,
     engine_path: Path,
@@ -23,6 +29,7 @@ def run_trt_cuda_task(
     target_height: int,
     benchmark_frames: str | None,
     video_encoder: str,
+    video_bitrate: str,
     tool_path: Path,
 ) -> None:
     if not engine_path.exists():
@@ -34,6 +41,7 @@ def run_trt_cuda_task(
     if benchmark_frames:
         frames_arg = ["--frames", benchmark_frames]
 
+    decode_width, decode_height = _decode_size(task.info.width, task.info.height)
     content_width = _content_width(task.info.width, task.info.height, target_height)
     cmd = [
         sys.executable,
@@ -48,6 +56,10 @@ def run_trt_cuda_task(
         str(task.info.width),
         "--input-height",
         str(task.info.height),
+        "--decode-width",
+        str(decode_width),
+        "--decode-height",
+        str(decode_height),
         "--fps",
         str(int(round(task.info.fps or 30))),
         "--target-width",
@@ -58,13 +70,16 @@ def run_trt_cuda_task(
         str(content_width),
         "--encoder",
         video_encoder,
+        "--bitrate",
+        video_bitrate,
         *frames_arg,
     ]
 
     env = os.environ.copy()
     print(
         f"Start TRT-CUDA: input={task.input} output={task.output} "
-        f"engine={engine_path} content_width={content_width} encoder={video_encoder}",
+        f"engine={engine_path} decode={decode_width}x{decode_height} "
+        f"content_width={content_width} encoder={video_encoder} bitrate={video_bitrate}",
         flush=True,
     )
     subprocess.run(cmd, env=env, check=True)

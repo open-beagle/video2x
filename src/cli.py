@@ -9,6 +9,12 @@ from planner import Task, choose_model, output_path, scale_for_height, should_sk
 from scanner import find_mp4
 
 
+def engine_shape(width: int, height: int) -> tuple[int, int]:
+    if width == 1280 and height == 720:
+        return 960, 540
+    return width, height
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -31,10 +37,9 @@ def main() -> int:
     progress_interval = int(os.environ.get("PROGRESS_INTERVAL", "30"))
     dry_run = env_bool("DRY_RUN", False)
     runner = os.environ.get("RUNNER", "trt-cuda").lower()
-    trt_engine_path = Path(
-        os.environ.get("TRT_ENGINE_PATH", str(model_dir / "realesr-general-x4v3-420x720-fp16.engine"))
-    )
-    video_encoder = os.environ.get("VIDEO_ENCODER", "libx264")
+    trt_engine_override = os.environ.get("TRT_ENGINE_PATH") or None
+    video_encoder = os.environ.get("VIDEO_ENCODER", "libx265")
+    video_bitrate = os.environ.get("VIDEO_BITRATE", "5M")
     trt_cuda_tool = Path(os.environ.get("TRT_CUDA_TOOL", "/app/tools/trt_cuda_video_runner.py"))
 
     if not data_dir.is_dir():
@@ -56,8 +61,9 @@ def main() -> int:
     print(f"RUNNER={runner}", flush=True)
     if runner != "trt-cuda":
         raise SystemExit(f"ERROR: unsupported RUNNER={runner}. This image only supports RUNNER=trt-cuda.")
-    print(f"TRT_ENGINE_PATH={trt_engine_path}", flush=True)
+    print(f"TRT_ENGINE_PATH={trt_engine_override or 'auto'}", flush=True)
     print(f"VIDEO_ENCODER={video_encoder}", flush=True)
+    print(f"VIDEO_BITRATE={video_bitrate}", flush=True)
     print(f"TRT_CUDA_TOOL={trt_cuda_tool}", flush=True)
     print(f"GPU_STATUS={gpu_status()}", flush=True)
 
@@ -131,6 +137,12 @@ def main() -> int:
         print(f"\nProcessing {index}/{len(tasks)}: {task.input}", flush=True)
         from trt_cuda_runner import run_trt_cuda_task
 
+        engine_width, engine_height = engine_shape(task.info.width, task.info.height)
+        trt_engine_path = (
+            Path(trt_engine_override)
+            if trt_engine_override
+            else model_dir / f"{task.model}-{engine_height}x{engine_width}-fp16.engine"
+        )
         run_trt_cuda_task(
             task,
             trt_engine_path,
@@ -138,6 +150,7 @@ def main() -> int:
             target_height,
             benchmark_frames,
             video_encoder,
+            video_bitrate,
             trt_cuda_tool,
         )
 
