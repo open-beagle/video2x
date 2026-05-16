@@ -30,19 +30,23 @@ models
 realesr-general-x4v3 -> ONNX -> TensorRT FP16 engine -> TRT-CUDA 视频处理
 ```
 
-运行 `0.3.0` 默认主线至少需要：
+运行 `0.3.0` 默认主线建议准备标准输入规格 engine：
+
+```text
+models/realesr-general-x4v3-640x360-fp16.engine
+models/realesr-general-x4v3-720x480-fp16.engine
+models/realesr-general-x4v3-854x480-fp16.engine
+models/realesr-general-x4v3-960x540-fp16.engine
+models/realesr-general-x4v3-1280x720-fp16.engine
+```
+
+其中 `720x420` 不是标准分辨率，只是当前样本兼容规格；如果仍要处理该类样本，可以额外保留：
 
 ```text
 models/realesr-general-x4v3-720x420-fp16.engine
 ```
 
-这个 engine 对应当前已验证的输入形状：
-
-```text
-1x3x420x720 -> 1x3x1680x2880 -> CUDA 后处理到 1920x1080
-```
-
-注意：当前 engine 是固定输入尺寸。不是 `720x420` 的低清视频，需要重新导出或构建匹配尺寸的 engine，后续再做动态 shape 或多 engine 管理。
+注意：当前 engine 是固定输入尺寸，文件名使用 `宽x高`，而 Tensor shape 仍是 `NCHW`。例如 `720x480` engine 对应输入 shape `1x3x480x720`。
 
 ## 3. 源权重与中间产物
 
@@ -56,6 +60,8 @@ RealESRGAN_x4plus.pth
 realesr-general-x4v3-720x420.onnx
 realesr-general-x4v3-720x420.onnx.data
 realesr-general-x4v3-720x420-fp16.engine
+realesr-general-x4v3-960x540-fp16.engine
+realesr-general-x4v3-1280x720-fp16.engine
 ```
 
 其中运行默认只读取 `.engine`。`.pth`、`.onnx` 和 `.onnx.data` 用于模型转换、重建 engine、画质对比和后续实验。
@@ -95,13 +101,19 @@ python tools/export_realesrgan_onnx.py \
 
 ## 6. 构建 TensorRT Engine
 
-在具备 TensorRT 的机器上构建 FP16 engine：
+在具备 TensorRT 的机器上构建 FP16 engine。推荐使用 build 镜像：
+
+```text
+video2x:0.3.0-build
+```
+
+build 镜像默认会自动扫描 `/models` 并构建标准 profile：
 
 ```bash
-trtexec \
-  --onnx=models/realesr-general-x4v3-720x420.onnx \
-  --saveEngine=models/realesr-general-x4v3-720x420-fp16.engine \
-  --fp16
+docker run --rm \
+  --device nvidia.com/gpu=0 \
+  -v /path/to/models:/models \
+  video2x:0.3.0-build
 ```
 
 不要默认使用 INT8。超分是像素级回归任务，INT8 可能带来断层、网格和细节异常，只能作为单独画质验证分支。

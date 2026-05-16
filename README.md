@@ -8,7 +8,7 @@
 
 - 默认使用 `RUNNER=trt-cuda` 高速路线。
 - 当前主路径为 `realesr-general-x4v3 + TensorRT FP16 + CUDA NV12 + HEVC NVENC`。
-- 420p/720p 到 1080p 已在 RTX 4090 上验证超过 30fps。
+- 标准 480p/720p 路线按固定输入规格 engine 管理，当前 420p/720p 样本到 1080p 已在 RTX 4090 上验证超过 30fps。
 - 递归扫描输入目录中的 `.mp4` 文件。
 - 自动跳过已是 1080p 及以上的视频。
 - 输出文件默认命名为 `*_1080p.mp4`。
@@ -40,7 +40,7 @@ docker run --rm \
 
 - 模型不打包进镜像。
 - 默认从 `/models` 读取权重。
-- 高速默认路径需要 `/models/realesr-general-x4v3-720x420-fp16.engine`。
+- 高速路线需要 `/models` 中存在匹配输入规格的 `*-fp16.engine`，文件名使用 `宽x高`。
 - Real-ESRGAN Python 代码仅用于本地模型导出和对比实验，不进入默认运行链路。
 - 本项目自己的扫描、规划、模型、GPU 监控和运行编排代码放在 `src/`。
 
@@ -64,6 +64,12 @@ bash .beagle/build.sh
 
 ```bash
 IMAGE_TAG=latest bash .beagle/build.sh
+```
+
+模型构建镜像用于 `.pth -> .onnx -> .engine`，不参与默认视频处理：
+
+```text
+video2x:0.3.0-build
 ```
 
 ## 文档

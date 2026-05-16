@@ -5,14 +5,17 @@ from pathlib import Path
 
 from ffprobe import probe_video
 from gpu import gpu_status
-from planner import Task, choose_model, output_path, scale_for_height, should_skip_output
+from planner import (
+    Task,
+    available_engines,
+    choose_engine_size,
+    choose_model,
+    content_width_for_height,
+    output_path,
+    scale_for_height,
+    should_skip_output,
+)
 from scanner import find_mp4
-
-
-def engine_shape(width: int, height: int) -> tuple[int, int]:
-    if width == 1280 and height == 720:
-        return 960, 540
-    return width, height
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -108,13 +111,42 @@ def main() -> int:
         model = choose_model(info.height, model_name)
         if model_name == "auto" and 360 <= info.height < 540:
             model = "realesr-general-x4v3"
+        engines = available_engines(model_dir, model)
+        engine_size = choose_engine_size(info.width, info.height, target_width, target_height, engines)
+        if trt_engine_override:
+            engine_width, engine_height = info.width, info.height
+        elif engine_size:
+            engine_width, engine_height = engine_size
+        else:
+            print("   action: skip", flush=True)
+            print("   reason: no compatible TensorRT engine", flush=True)
+            print(f"   available engines: {', '.join(f'{w}x{h}' for w, h in sorted(engines)) or 'none'}", flush=True)
+            print(f"   needed: <= {info.width}x{info.height}, x4 output must cover {target_width}x{target_height}", flush=True)
+            continue
+
         scale = scale_for_height(info.width, info.height, target_height, outscale_override)
-        task = Task(input=input_path, output=output, info=info, model=model, outscale=scale, tile=tile)
+        content_width = content_width_for_height(info.width, info.height, target_height)
+        task = Task(
+            input=input_path,
+            output=output,
+            info=info,
+            model=model,
+            outscale=scale,
+            tile=tile,
+            engine_width=engine_width,
+            engine_height=engine_height,
+            decode_width=engine_width,
+            decode_height=engine_height,
+            content_width=content_width,
+        )
         tasks.append(task)
 
         print(f"   output: {output}", flush=True)
         print("   action: upscale", flush=True)
         print(f"   model: {model}", flush=True)
+        print(f"   engine input: {engine_width}x{engine_height}", flush=True)
+        print(f"   decode: {engine_width}x{engine_height}", flush=True)
+        print(f"   content width: {content_width}", flush=True)
         print(f"   outscale: {scale:g}", flush=True)
         print(f"   tile: {tile}", flush=True)
         print("   estimated time: after start", flush=True)
@@ -129,6 +161,7 @@ def main() -> int:
         print(f"   input: {task.info.width}x{task.info.height}, {task.info.frames or 'unknown'} frames", flush=True)
         print(f"   output: {task.output}", flush=True)
         print(f"   model: {task.model}", flush=True)
+        print(f"   engine input: {task.engine_width}x{task.engine_height}", flush=True)
         print(f"   outscale: {task.outscale:g}", flush=True)
 
     if dry_run:
@@ -139,11 +172,10 @@ def main() -> int:
         print(f"\nProcessing {index}/{len(tasks)}: {task.input}", flush=True)
         from runner import run_trt_cuda_task
 
-        engine_width, engine_height = engine_shape(task.info.width, task.info.height)
         trt_engine_path = (
             Path(trt_engine_override)
             if trt_engine_override
-            else model_dir / f"{task.model}-{engine_width}x{engine_height}-fp16.engine"
+            else model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-fp16.engine"
         )
         run_trt_cuda_task(
             task,

@@ -177,6 +177,8 @@ MP4 output
 
 该策略避免直接 x4 到 `5120x2880` 的巨大中间帧，换取端到端速度超过 30fps。
 
+TensorRT engine 的命名、标准分辨率 profile、非标准输入选择、build 镜像和重建策略独立记录在 `docs/design-engine.md`。Zero-Copy 设计只关心选定 engine 之后的视频管线。
+
 ## 6. 真正 Zero-Copy 目标架构
 
 最终目标不是把 NV12 从显存复制回 CPU 后再喂给 ffmpeg，而是让帧尽可能留在 GPU 内部：
