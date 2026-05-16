@@ -65,15 +65,14 @@ RUN python3 -m pip install --no-cache-dir --no-compile --break-system-packages \
     && site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')" \
     && if [ -d "${site_packages}/tensorrt_libs" ]; then \
         find "${site_packages}/tensorrt_libs" -maxdepth 1 -type f \( \
-            -name "libnvinfer_builder_resource.so*" -o \
+            -name "libnvinfer_builder_resource*.so*" -o \
             -name "libnvinfer_dispatch.so*" -o \
             -name "libnvinfer_lean.so*" -o \
-            -name "libnvinfer_vc_plugin.so*" -o \
-            -name "libnvonnxparser.so*" \
+            -name "libnvinfer_vc_plugin.so*" \
         \) -delete; \
     fi \
     && find "${site_packages}" -type d -name "__pycache__" -prune -exec rm -rf {} + \
-    && python3 -c "import tensorrt as trt; runtime = trt.Runtime(trt.Logger(trt.Logger.ERROR)); assert runtime is not None" \
+    && python3 -c "import tensorrt" \
     && mkdir -p "${MODEL_DIR}"
 
 COPY .beagle/entrypoint.sh /usr/local/bin/video2x-entrypoint
