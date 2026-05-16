@@ -4,24 +4,24 @@
 
 实测硬件：RTX 4090，单容器单 GPU，输出统一为 1920x1080。
 
-| 输入 | 模型                 | 实测 fps | 5 分钟 30fps | 2 小时 30fps | 判断         |
-| ---- | -------------------- | -------- | ------------ | ------------ | ------------ |
-| 720p | RealESRGAN_x2plus    | 2.798    | 约 53.6 分钟 | 约 21.4 小时 | 太慢         |
-| 420p | RealESRGAN_x4plus    | 2.042    | 约 73.5 分钟 | 约 29.4 小时 | 淘汰         |
-| 420p | realesr-general-x4v3 | 4.583    | 约 32.7 分钟 | 约 13.1 小时 | 当前最快基线 |
-| 420p | realesr-general-x4v3 TensorRT FP16 纯推理 | 149.447 | 约 1.0 分钟 | 约 24.1 分钟 | 模型算力充足，需接视频管线 |
-| 420p | realesr-general-x4v3 TensorRT FP16 视频闭环 | 6.918 | 约 21.7 分钟 | 约 8.7 小时 | 已跑通但仍太慢 |
-| 420p | realesr-general-x4v3 TensorRT FP16 + GStreamer CUDA scale | 8.163 | 约 18.4 分钟 | 约 7.4 小时 | 后处理改善，但仍有大图拷贝瓶颈 |
-| 420p | realesr-general-x4v3 TensorRT FP16 + CUDA device postprocess | 139.209 | 约 1.1 分钟 | 约 25.9 分钟 | 算力层面达标，需接真实视频链路 |
-| 420p | realesr-general-x4v3 TensorRT FP16 + CUDA postprocess + libx264 实视频链路 | 47.798 | 约 3.1 分钟 | 约 1.26 小时 | 已达到 2 小时内完成目标 |
-| 420p | RUNNER=trt-cuda 正式 CLI | 53.377 | 约 2.8 分钟 | 约 1.12 小时 | 主入口已达标 |
-| 420p | 0.3.0 正式镜像 RUNNER=trt-cuda 五分钟样本 | 69.026 | 约 2.2 分钟 | 约 52.2 分钟 | 正式镜像已达标 |
-| 720p | realesr-general-x4v3 720x1280 TensorRT FP16 纯推理 | 44.926 | 约 3.3 分钟 | 约 1.34 小时 | 纯模型达标 |
-| 720p | 0.3.0 正式镜像 RUNNER=trt-cuda x4 中间帧路线 | 24.774 | 约 6.1 分钟 | 约 2.42 小时 | 输出正确但速度未达标 |
-| 720p | RealESRGAN_x2plus TensorRT FP16 纯推理 | 10.475 | 约 14.3 分钟 | 约 5.73 小时 | 模型太重，淘汰 |
-| 720p | 预缩 540p + realesr-general-x4v3 TensorRT FP16 纯推理 | 78.179 | 约 1.9 分钟 | 约 46.1 分钟 | 模型侧达标 |
-| 720p | 预缩 540p + RUNNER=trt-cuda CLI | 39.758 | 约 3.8 分钟 | 约 1.51 小时 | 速度达标，需画质确认 |
-| 720p | 预缩 540p + RUNNER=trt-cuda + HEVC 5M | 34.554 | 约 4.3 分钟 | 约 1.74 小时 | 成品压缩达标 |
+| 输入 | 模型                                                                       | 实测 fps | 5 分钟 30fps | 2 小时 30fps | 判断                           |
+| ---- | -------------------------------------------------------------------------- | -------- | ------------ | ------------ | ------------------------------ |
+| 720p | RealESRGAN_x2plus                                                          | 2.798    | 约 53.6 分钟 | 约 21.4 小时 | 太慢                           |
+| 420p | RealESRGAN_x4plus                                                          | 2.042    | 约 73.5 分钟 | 约 29.4 小时 | 淘汰                           |
+| 420p | realesr-general-x4v3                                                       | 4.583    | 约 32.7 分钟 | 约 13.1 小时 | 当前最快基线                   |
+| 420p | realesr-general-x4v3 TensorRT FP16 纯推理                                  | 149.447  | 约 1.0 分钟  | 约 24.1 分钟 | 模型算力充足，需接视频管线     |
+| 420p | realesr-general-x4v3 TensorRT FP16 视频闭环                                | 6.918    | 约 21.7 分钟 | 约 8.7 小时  | 已跑通但仍太慢                 |
+| 420p | realesr-general-x4v3 TensorRT FP16 + GStreamer CUDA scale                  | 8.163    | 约 18.4 分钟 | 约 7.4 小时  | 后处理改善，但仍有大图拷贝瓶颈 |
+| 420p | realesr-general-x4v3 TensorRT FP16 + CUDA device postprocess               | 139.209  | 约 1.1 分钟  | 约 25.9 分钟 | 算力层面达标，需接真实视频链路 |
+| 420p | realesr-general-x4v3 TensorRT FP16 + CUDA postprocess + libx264 实视频链路 | 47.798   | 约 3.1 分钟  | 约 1.26 小时 | 已达到 2 小时内完成目标        |
+| 420p | RUNNER=trt-cuda 正式 CLI                                                   | 53.377   | 约 2.8 分钟  | 约 1.12 小时 | 主入口已达标                   |
+| 420p | 0.3.0 正式镜像 RUNNER=trt-cuda 五分钟样本                                  | 69.026   | 约 2.2 分钟  | 约 52.2 分钟 | 正式镜像已达标                 |
+| 720p | realesr-general-x4v3 720x1280 TensorRT FP16 纯推理                         | 44.926   | 约 3.3 分钟  | 约 1.34 小时 | 纯模型达标                     |
+| 720p | 0.3.0 正式镜像 RUNNER=trt-cuda x4 中间帧路线                               | 24.774   | 约 6.1 分钟  | 约 2.42 小时 | 输出正确但速度未达标           |
+| 720p | RealESRGAN_x2plus TensorRT FP16 纯推理                                     | 10.475   | 约 14.3 分钟 | 约 5.73 小时 | 模型太重，淘汰                 |
+| 720p | 预缩 540p + realesr-general-x4v3 TensorRT FP16 纯推理                      | 78.179   | 约 1.9 分钟  | 约 46.1 分钟 | 模型侧达标                     |
+| 720p | 预缩 540p + RUNNER=trt-cuda CLI                                            | 39.758   | 约 3.8 分钟  | 约 1.51 小时 | 速度达标，需画质确认           |
+| 720p | 预缩 540p + RUNNER=trt-cuda + HEVC 5M                                      | 34.554   | 约 4.3 分钟  | 约 1.74 小时 | 成品压缩达标                   |
 
 目标是 2 小时 30fps 视频在 2 小时内完成，至少需要 30 fps。当前最快 `realesr-general-x4v3` 只有 4.583 fps，缺口约 6.5 倍。
 
@@ -91,15 +91,15 @@ NVDEC -> GPU surface / CUDA memory -> TRT FP16 inference -> CUDA/NPP postprocess
 
 当前服务器已经构建 `video2x:trt` 实验镜像，并完成 `realesr-general-x4v3` 的 ONNX 与 TensorRT FP16 engine 验证：
 
-| 项目 | 结果 |
-| ---- | ---- |
-| ONNX 输入 | `1x3x420x720` |
-| ONNX 输出 | `1x3x1680x2880` |
-| TensorRT engine | `realesr-general-x4v3-420x720-fp16.engine` |
-| Engine size | 2.684 MiB |
-| Throughput | 149.447 qps |
-| GPU Compute Time mean | 6.6874 ms |
-| H2D / D2H | 0 ms，使用 `--noDataTransfers` 测纯推理 |
+| 项目                  | 结果                                       |
+| --------------------- | ------------------------------------------ |
+| ONNX 输入             | `1x3x420x720`                              |
+| ONNX 输出             | `1x3x1680x2880`                            |
+| TensorRT engine       | `realesr-general-x4v3-720x420-fp16.engine` |
+| Engine size           | 2.684 MiB                                  |
+| Throughput            | 149.447 qps                                |
+| GPU Compute Time mean | 6.6874 ms                                  |
+| H2D / D2H             | 0 ms，使用 `--noDataTransfers` 测纯推理    |
 
 结论：`realesr-general-x4v3 + TensorRT FP16` 已证明模型侧具备充足吞吐，视频闭环也已跑通，但当前 CPU 后处理吞掉主要时间。下一步必须把 resize/pad/postprocess 移到 GPU 侧，优先 CUDA/NPP 或真正 Zero-Copy 管线。
 
@@ -181,15 +181,15 @@ TensorRT 是 NVIDIA 官方高性能推理 SDK，支持从 PyTorch/TensorFlow/ONN
 
 ## 候选优先级
 
-| 优先级 | 候选                                   | 目的                                | 预期收益                           | 风险                                                 |
-| ------ | -------------------------------------- | ----------------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| 优先级 | 候选                                            | 目的                                | 预期收益                               | 风险                                                 |
+| ------ | ----------------------------------------------- | ----------------------------------- | -------------------------------------- | ---------------------------------------------------- |
 | P0     | realesr-general-x4v3 TensorRT FP16 + GPU 后处理 | 当前最快模型主线加速                | 纯推理已远超 30fps，视频闭环已定位瓶颈 | 必须消除 CPU 后处理和大图内存拷贝                    |
-| P0     | Zero-Copy NVDEC/TRT/NPP/NVENC Pipeline | 消除 I/O 和 CPU round-trip          | 解决吞吐架构瓶颈                   | 工程复杂，需要 C++/CUDA 或 GStreamer/FFmpeg 深度集成 |
-| P0     | RTX Video SDK / Maxine VSR             | 验证是否能接近实时                  | 最有 30fps 希望                    | 黑盒模型，420p 非整数倍率是盲区                      |
-| P0     | RealBasicVSR                           | 找到质量不输 Real-ESRGAN 的视频模型 | 公开基准显示质量与速度都强         | 视频模型接入复杂，长视频显存稳定性要验证             |
-| P1     | Real-ESRGAN TensorRT FP16              | 保持当前质量路线，优化工程栈        | 给现有质量基线一个公平上限         | 重模型可能仍然慢                                     |
-| P1     | BasicVSR++                             | 合成退化视频对照                    | 时序一致性好                       | 真实退化指标不如 RealBasicVSR                        |
-| P2     | SwinIR / Swin2SR                       | 高质量图片超分对照                  | 可能质量好                         | Transformer 通常不够快，视频一致性要验证             |
+| P0     | Zero-Copy NVDEC/TRT/NPP/NVENC Pipeline          | 消除 I/O 和 CPU round-trip          | 解决吞吐架构瓶颈                       | 工程复杂，需要 C++/CUDA 或 GStreamer/FFmpeg 深度集成 |
+| P0     | RTX Video SDK / Maxine VSR                      | 验证是否能接近实时                  | 最有 30fps 希望                        | 黑盒模型，420p 非整数倍率是盲区                      |
+| P0     | RealBasicVSR                                    | 找到质量不输 Real-ESRGAN 的视频模型 | 公开基准显示质量与速度都强             | 视频模型接入复杂，长视频显存稳定性要验证             |
+| P1     | Real-ESRGAN TensorRT FP16                       | 保持当前质量路线，优化工程栈        | 给现有质量基线一个公平上限             | 重模型可能仍然慢                                     |
+| P1     | BasicVSR++                                      | 合成退化视频对照                    | 时序一致性好                           | 真实退化指标不如 RealBasicVSR                        |
+| P2     | SwinIR / Swin2SR                                | 高质量图片超分对照                  | 可能质量好                             | Transformer 通常不够快，视频一致性要验证             |
 
 ## 下一步验证标准
 

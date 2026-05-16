@@ -41,7 +41,7 @@ def main() -> int:
     video_encoder = os.environ.get("VIDEO_ENCODER", "libx265")
     video_bitrate = os.environ.get("VIDEO_BITRATE", "5M")
     video_pixel_format = os.environ.get("VIDEO_PIXEL_FORMAT") or None
-    trt_cuda_tool = Path(os.environ.get("TRT_CUDA_TOOL", "/app/tools/trt_cuda_video_runner.py"))
+    trt_cuda_tool = Path(os.environ.get("TRT_CUDA_TOOL", "/app/src/worker.py"))
 
     if not data_dir.is_dir():
         raise SystemExit(f"ERROR: DATA_DIR does not exist: {data_dir}")
@@ -137,13 +137,13 @@ def main() -> int:
 
     for index, task in enumerate(tasks, 1):
         print(f"\nProcessing {index}/{len(tasks)}: {task.input}", flush=True)
-        from trt_cuda_runner import run_trt_cuda_task
+        from runner import run_trt_cuda_task
 
         engine_width, engine_height = engine_shape(task.info.width, task.info.height)
         trt_engine_path = (
             Path(trt_engine_override)
             if trt_engine_override
-            else model_dir / f"{task.model}-{engine_height}x{engine_width}-fp16.engine"
+            else model_dir / f"{task.model}-{engine_width}x{engine_height}-fp16.engine"
         )
         run_trt_cuda_task(
             task,

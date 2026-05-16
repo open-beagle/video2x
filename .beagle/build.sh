@@ -3,7 +3,7 @@ set -euo pipefail
 
 IMAGE_NAME="${IMAGE_NAME:-video2x}"
 IMAGE_TAG="${IMAGE_TAG:-0.3.0}"
-BASE="${BASE:-nvidia/cuda:13.0.3-runtime-ubuntu24.04}"
+BASE="${BASE:-nvidia/cuda:13.2.1-runtime-ubuntu24.04}"
 DOCKERFILE="${DOCKERFILE:-.beagle/dockerfile}"
 CONTEXT="${CONTEXT:-.}"
 

@@ -40,7 +40,7 @@ docker run --rm \
 
 - 模型不打包进镜像。
 - 默认从 `/models` 读取权重。
-- 高速默认路径需要 `/models/realesr-general-x4v3-420x720-fp16.engine`。
+- 高速默认路径需要 `/models/realesr-general-x4v3-720x420-fp16.engine`。
 - Real-ESRGAN Python 代码仅用于本地模型导出和对比实验，不进入默认运行链路。
 - 本项目自己的扫描、规划、模型、GPU 监控和运行编排代码放在 `src/`。
 

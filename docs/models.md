@@ -33,7 +33,7 @@ realesr-general-x4v3 -> ONNX -> TensorRT FP16 engine -> TRT-CUDA 视频处理
 运行 `0.3.0` 默认主线至少需要：
 
 ```text
-models/realesr-general-x4v3-420x720-fp16.engine
+models/realesr-general-x4v3-720x420-fp16.engine
 ```
 
 这个 engine 对应当前已验证的输入形状：
@@ -53,9 +53,9 @@ realesr-general-x4v3.pth
 realesr-general-wdn-x4v3.pth
 RealESRGAN_x2plus.pth
 RealESRGAN_x4plus.pth
-realesr-general-x4v3-420x720.onnx
-realesr-general-x4v3-420x720.onnx.data
-realesr-general-x4v3-420x720-fp16.engine
+realesr-general-x4v3-720x420.onnx
+realesr-general-x4v3-720x420.onnx.data
+realesr-general-x4v3-720x420-fp16.engine
 ```
 
 其中运行默认只读取 `.engine`。`.pth`、`.onnx` 和 `.onnx.data` 用于模型转换、重建 engine、画质对比和后续实验。
@@ -86,7 +86,7 @@ curl -L -o models/RealESRGAN_x4plus.pth \
 python tools/export_realesrgan_onnx.py \
   --model realesr-general-x4v3 \
   --weights models/realesr-general-x4v3.pth \
-  --output models/realesr-general-x4v3-420x720.onnx \
+  --output models/realesr-general-x4v3-720x420.onnx \
   --height 420 \
   --width 720
 ```
@@ -99,8 +99,8 @@ python tools/export_realesrgan_onnx.py \
 
 ```bash
 trtexec \
-  --onnx=models/realesr-general-x4v3-420x720.onnx \
-  --saveEngine=models/realesr-general-x4v3-420x720-fp16.engine \
+  --onnx=models/realesr-general-x4v3-720x420.onnx \
+  --saveEngine=models/realesr-general-x4v3-720x420-fp16.engine \
   --fp16
 ```
 

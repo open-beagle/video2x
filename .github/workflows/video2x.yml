@@ -7,7 +7,7 @@ on:
 
 env:
   BUILD_VERSION: "0.3.0"
-  CUDA_VERSION: "13.0.3"
+  CUDA_VERSION: "13.2.1"
   IMAGE_NAME: registry.cn-qingdao.aliyuncs.com/wod/video2x
 
 jobs:
