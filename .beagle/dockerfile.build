@@ -43,7 +43,9 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages \
         --index-url https://download.pytorch.org/whl/cu130 \
         torch torchvision \
     && python3 -m pip install --no-cache-dir --break-system-packages \
-        basicsr facexlib gfpgan numpy onnx opencv-python-headless Pillow tqdm \
+        --index-url https://mirrors.aliyun.com/pypi/simple/ \
+        --trusted-host mirrors.aliyun.com \
+        basicsr facexlib gfpgan numpy onnx onnxscript opencv-python-headless Pillow tqdm \
         cuda-python tensorrt \
     && apt-get update \
     && apt-get install -y --no-install-recommends cuda-nvrtc-13-2 libnvinfer-bin libnvonnxparsers10 \
