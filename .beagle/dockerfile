@@ -11,29 +11,26 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_DRIVER_CAPABILITIES=all \
     DATA_DIR=/data \
     TARGET_HEIGHT=1080 \
-    MODEL_NAME=RealESRGAN_x2plus \
+    MODEL_NAME=auto \
     TILE=0 \
     GPU_ID=0 \
     OUTPUT_SUFFIX=_1080p \
     SKIP_EXISTING=true \
-    REALESRGAN_HOME=/opt/Real-ESRGAN \
+    REALESRGAN_HOME=/app/realesrgan \
     MODEL_DIR=/models
 
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true \
-    && sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true \
-    && sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true \
-    && sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         ffmpeg \
-        git \
         libglib2.0-0 \
         libgl1 \
+        python-is-python3 \
         python3 \
         python3-pip \
         python3-dev \
+        procps \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,21 +39,14 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages \
         torchvision==0.25.0+cu130 \
         --extra-index-url https://download.pytorch.org/whl/cu130
 
-WORKDIR /opt
+WORKDIR /app
 
-RUN git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git "${REALESRGAN_HOME}" \
-    && cd "${REALESRGAN_HOME}" \
-    && python3 -m pip install --no-cache-dir --break-system-packages -r requirements.txt \
-    && python3 -m pip install --no-cache-dir --break-system-packages basicsr facexlib gfpgan \
-    && python3 setup.py develop
+COPY src /app/src
+COPY vendor/realesrgan "${REALESRGAN_HOME}"
 
-RUN mkdir -p "${MODEL_DIR}" "${REALESRGAN_HOME}/weights" \
-    && wget -O "${MODEL_DIR}/RealESRGAN_x2plus.pth" \
-        https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth \
-    && wget -O "${MODEL_DIR}/RealESRGAN_x4plus.pth" \
-        https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth \
-    && ln -sf "${MODEL_DIR}/RealESRGAN_x2plus.pth" "${REALESRGAN_HOME}/weights/RealESRGAN_x2plus.pth" \
-    && ln -sf "${MODEL_DIR}/RealESRGAN_x4plus.pth" "${REALESRGAN_HOME}/weights/RealESRGAN_x4plus.pth"
+RUN python3 -m pip install --no-cache-dir --break-system-packages -r "${REALESRGAN_HOME}/requirements.txt" \
+    && python3 -m pip install --no-cache-dir --break-system-packages basicsr facexlib gfpgan ffmpeg-python \
+    && mkdir -p "${MODEL_DIR}"
 
 COPY .beagle/entrypoint.sh /usr/local/bin/video2x-entrypoint
 RUN chmod +x /usr/local/bin/video2x-entrypoint

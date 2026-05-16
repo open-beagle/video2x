@@ -20,7 +20,8 @@
 - PyTorch CUDA 版本
 - 官方 Real-ESRGAN
 - ffmpeg / ffprobe
-- Bash entrypoint
+- Python 主控程序
+- Bash entrypoint 只负责启动 Python
 - Docker
 
 可选：
@@ -38,18 +39,31 @@ FROM nvidia/cuda:<cuda-runtime-tag>-runtime-ubuntu24.04
 
 构建步骤：
 
-1. 安装系统依赖：`ffmpeg`、`git`、`libgl1`、`libglib2.0-0`。
+1. 安装系统依赖：`ffmpeg`、`libgl1`、`libglib2.0-0`、`wget`。
 2. 安装 PyTorch CUDA 版本和 Real-ESRGAN Python 依赖。
-3. 克隆或复制官方 Real-ESRGAN 源码。
-4. 下载默认模型权重 `RealESRGAN_x2plus.pth`。
-5. 复制本项目 `entrypoint.sh`。
+3. 复制本项目 `vendor/realesrgan` 中的 Real-ESRGAN Python 源码。
+4. 不在镜像构建阶段下载或打包模型权重。
+5. 复制本项目 `src/` 和 `entrypoint.sh`。
 
-模型目录建议：
+源码策略：
+
+```text
+src/
+vendor/realesrgan
+```
+
+本项目自己的扫描、规划、模型、GPU 监控和运行编排代码放在 `src/`。
+
+Real-ESRGAN Python 代码必须在本项目内，便于后续修改日志、模型路径、性能管线和编码策略。
+
+模型目录：
 
 ```text
 /models/RealESRGAN_x2plus.pth
 /models/RealESRGAN_x4plus.pth
 ```
+
+模型不进入镜像。容器运行时优先读取 `/models`，缺失时按需下载到 `/models`。
 
 ## 4. 入口流程
 

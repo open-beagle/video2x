@@ -6,8 +6,8 @@ on:
       - release
 
 env:
-  BUILD_VERSION: "13.0.3"
-  VIDEO2X_VERSION: "v0.1.0"
+  BUILD_VERSION: "0.3.0"
+  CUDA_VERSION: "13.0.3"
   IMAGE_NAME: registry.cn-qingdao.aliyuncs.com/wod/video2x
 
 jobs:
@@ -43,12 +43,12 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }}
+            ${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }}
             ${{ env.IMAGE_NAME }}:latest
           build-args: |
-            BASE=nvidia/cuda:${{ env.BUILD_VERSION }}-runtime-ubuntu24.04
+            BASE=nvidia/cuda:${{ env.CUDA_VERSION }}-runtime-ubuntu24.04
             AUTHOR=${{ github.repository_owner }}
-            VERSION=${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }}
+            VERSION=${{ env.BUILD_VERSION }}
 
       - name: Build complete
-        run: echo "video2x ${{ env.BUILD_VERSION }}-video2x-${{ env.VIDEO2X_VERSION }} pushed successfully to Aliyun!"
+        run: echo "video2x ${{ env.BUILD_VERSION }} pushed successfully to Aliyun!"

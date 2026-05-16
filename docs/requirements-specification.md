@@ -109,8 +109,10 @@
 ## 9. 容器要求
 
 - 基础镜像应包含 CUDA、PyTorch、Real-ESRGAN、ffmpeg。
-- 容器内必须能执行官方 `inference_realesrgan_video.py` 或等价封装。
-- 模型权重可在构建时下载，也可运行时挂载。
+- Real-ESRGAN Python 源码必须放在本项目内，不能在 Docker build 时临时 clone 外部项目。
+- 容器内必须能执行本项目内的 `vendor/realesrgan/inference_realesrgan_video.py` 或等价封装。
+- 模型权重不打包进镜像。
+- 模型权重优先从 `/models` 挂载目录读取；缺失时可运行时下载到 `/models`。
 - 运行时使用 NVIDIA 容器运行时或 CDI 设备，例如 `--device nvidia.com/gpu=3`。
 
 ## 10. 验收标准
