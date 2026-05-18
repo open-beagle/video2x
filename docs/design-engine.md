@@ -293,11 +293,95 @@ Plugin 不解决：
 
 ### 11.3 推进顺序
 
-1. 导出 `realesr-general-x4v3-1280x720.onnx`，用 `polygraphy` 或 ONNX 工具确认末端节点结构。
+1. 导出 `realesr-general-x4v3-1280x720.onnx`，用 ONNX 工具确认末端节点结构。
 2. 找到最后的 x4 重构边界，确认是否是 PixelShuffle / DepthToSpace / Reshape-Transpose-Reshape 组合。
-3. 先做等价性实验：Plugin 输出 RGB FP16，对比当前 `x4 TensorRT -> CUDA resize` 的抽帧差异。
+3. 先做等价性实验：fused tail 输出 NV12，对比当前 `x4 TensorRT -> CUDA resize` 的抽帧差异。
 4. 再做性能实验：统计显存峰值、TRT latency、总 fps。
-5. 最后考虑把 RGB -> NV12 也并入 Plugin 或紧邻 kernel，进一步减少一次大图读写。
+5. 最后考虑把 fused tail 从 Python + CUDA kernel 原型推进为 TensorRT Plugin，减少 Python/ctypes 调度边界。
+
+当前 ONNX 末端已经确认：
+
+```text
+Conv(64 -> 48, 3x3)
+-> DepthToSpace(blocksize=4, mode=CRD)
+-> Add(ResizeNearest(input, x4))
+-> output[1,3,2880,5120]
+```
+
+对于 `1280x720` 输入：
+
+```text
+prelu_32:     [1,64,720,1280] FP16
+conv2d_33:   [1,48,720,1280] FP16
+pixel_shuffle/output: [1,3,2880,5120] FP16
+```
+
+关键判断：
+
+- 只融合 `DepthToSpace + Downsample` 不够，因为 `Conv(64 -> 48)` 的输出元素数与 x4 RGB 输出相同，仍然是约 `88.5MB/frame`。
+- 真正的融合边界必须前移到最后一个 Conv 之前，也就是以 `prelu_32` 和原始 `input` 为输入，直接生成 `1920x1080 NV12`。
+- SRVGG 还有 `nearest x4 input` 残差分支，Plugin 必须同时实现 `Conv tail + PixelShuffle + Add nearest base + Downsample`。
+
+已完成 P0 原型：
+
+```text
+feature engine:
+input[1,3,720,1280] -> prelu_32[1,64,720,1280]
+
+CUDA fused tail:
+prelu_32 + input + final_conv_weight/bias
+-> implicit PixelShuffle + nearest residual + resize
+-> FFmpeg CUDA/NV12 AVFrame
+```
+
+原型验证：
+
+```text
+输出：
+/data/jasna/720p/INU-047-U-720p_1080p_tailfuse_benchmark.mp4
+
+frames=300
+elapsed=43.656s
+fps=6.872
+d2h_frame=0.000s
+encode_write=0.208s
+```
+
+画质量化，对比当前稳定 `zcfull_benchmark`：
+
+```text
+PSNR average=47.371430 dB
+SSIM All=0.993079
+```
+
+2x2 NV12 block 原型：
+
+```text
+输出：
+/data/jasna/720p/INU-047-U-720p_1080p_tailfuse2x2_benchmark.mp4
+
+frames=300
+elapsed=14.244s
+fps=21.061
+d2h_frame=0.000s
+encode_write=0.097s
+```
+
+画质量化，对比当前稳定 `zcfull_benchmark`：
+
+```text
+PSNR average=47.371178 dB
+SSIM All=0.993061
+```
+
+2x2 版本把每个 CUDA thread 从单像素改成处理一个 NV12 2x2 block，避免 UV 分支再次重复采样四个像素。速度从 `6.872 fps` 提升到 `21.061 fps`，证明重复采样是主要开销之一，但仍未达到 30fps。
+
+阶段结论：
+
+- 原型证明融合边界和数学路径可行。
+- 朴素 fused tail kernel 按目标像素反算 `3x3x64` 最后一层卷积，计算量过大，不可作为主线。
+- 2x2 原型证明减少重复采样有效，但仍未解决根因。
+- 下一版必须把 tail conv 从“按 HR 输出采样点算”改为“按 LR 像素算 48 个子像素一次，然后供 1080p resize 复用”，或者直接写 TensorRT Plugin / CUDA tile kernel，让同一块 LR feature 被复用，而不是每个输出采样点重复卷积。
 
 ### 11.4 验收标准
 
@@ -319,9 +403,11 @@ Plugin 不解决：
 - [x] build 镜像默认导出 FP16 ONNX。
 - [x] runtime CUDA 后处理支持 FP16 TRT 输出。
 - [ ] 验证 720p direct FP16 engine 的 GPU fused postprocess，避免长期依赖 540p 预缩。
-- [ ] 审查 `1280x720` ONNX 末端图结构，定位 PixelShuffle / DepthToSpace 边界。
-- [ ] 设计 TensorRT Plugin：融合 PixelShuffle + Downsample。
-- [ ] 验证 Plugin 输出与当前 CUDA resize 路线的画质一致性。
+- [x] 审查 `1280x720` ONNX 末端图结构，定位 PixelShuffle / DepthToSpace 边界。
+- [x] 完成 fused tail CUDA 原型：融合最后 Conv、PixelShuffle、nearest residual、Downsample、NV12 输出。
+- [x] 验证 fused tail 原型输出与当前 CUDA resize 路线的画质一致性。
+- [ ] 优化 fused tail：避免按目标像素重复执行 `3x3x64` tail conv。
+- [ ] 设计 TensorRT Plugin：融合最后 Conv + PixelShuffle + Downsample。
 
 ## 13. 运行命令
 
@@ -361,6 +447,17 @@ docker run --rm \
 {model}-{width}x{height}.onnx.data
 {model}-{width}x{height}-fp16.engine
 ```
+
+对 `realesr-general-x4v3` 和 `realesr-general-wdn-x4v3`，build 镜像还会额外生成 conv48 tail engine：
+
+```text
+{model}-{width}x{height}-conv48.onnx
+{model}-{width}x{height}-conv48.onnx.data
+{model}-{width}x{height}-conv48-fp16.engine
+{model}-tail-{width}x{height}-conv48.npz
+```
+
+该 engine 输出 SRVGG 的 `conv2d_33 [1,48,H,W]`，供 runtime 的 `VIDEO_POSTPROCESS_MODE=srvgg-conv48-tail` 使用。runtime 会自动选择 `-conv48-fp16.engine`，不需要手工指定 `TRT_ENGINE_PATH`。
 
 如果 `.onnx` 或 `.engine` 已经存在，容器会跳过对应步骤，不重复构建。
 

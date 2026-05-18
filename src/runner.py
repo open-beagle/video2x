@@ -19,6 +19,15 @@ def run_trt_cuda_task(
     video_bitrate: str,
     video_pixel_format: str | None,
     tool_path: Path,
+    pipeline_depth: int,
+    video_gop_size: int,
+    video_input_mode: str,
+    cuda_p010_bridge: Path,
+    video_output_mode: str,
+    cuda_nvenc_bridge: Path,
+    video_postprocess_mode: str,
+    srvgg_tail_weights: Path | None,
+    srvgg_tail_kernel: str,
 ) -> None:
     if not engine_path.exists():
         raise RuntimeError(f"TRT engine not found: {engine_path}")
@@ -61,16 +70,36 @@ def run_trt_cuda_task(
         video_encoder,
         "--bitrate",
         video_bitrate,
+        "--gop-size",
+        str(video_gop_size),
         "--output-pix-fmt",
         output_pix_fmt,
+        "--pipeline-depth",
+        str(pipeline_depth),
+        "--input-mode",
+        video_input_mode,
+        "--cuda-p010-bridge",
+        str(cuda_p010_bridge),
+        "--output-mode",
+        video_output_mode,
+        "--cuda-nvenc-bridge",
+        str(cuda_nvenc_bridge),
+        "--postprocess-mode",
+        video_postprocess_mode,
+        "--srvgg-tail-kernel",
+        srvgg_tail_kernel,
         *frames_arg,
     ]
+    if srvgg_tail_weights:
+        cmd += ["--srvgg-tail-weights", str(srvgg_tail_weights)]
 
     env = os.environ.copy()
     print(
         f"Start TRT-CUDA: input={task.input} output={task.output} "
         f"engine={engine_path} decode={task.decode_width}x{task.decode_height} "
-        f"content_width={task.content_width} encoder={video_encoder} bitrate={video_bitrate} pix_fmt={output_pix_fmt}",
+        f"content_width={task.content_width} encoder={video_encoder} bitrate={video_bitrate} "
+        f"pix_fmt={output_pix_fmt} gop={video_gop_size} pipeline_depth={pipeline_depth} "
+        f"input_mode={video_input_mode} output_mode={video_output_mode} postprocess_mode={video_postprocess_mode}",
         flush=True,
     )
     subprocess.run(cmd, env=env, check=True)

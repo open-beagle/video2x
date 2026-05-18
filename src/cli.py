@@ -41,9 +41,20 @@ def main() -> int:
     dry_run = env_bool("DRY_RUN", False)
     runner = os.environ.get("RUNNER", "trt-cuda").lower()
     trt_engine_override = os.environ.get("TRT_ENGINE_PATH") or None
+    trt_engine_size_override = os.environ.get("TRT_ENGINE_SIZE") or None
     video_encoder = os.environ.get("VIDEO_ENCODER", "libx265")
     video_bitrate = os.environ.get("VIDEO_BITRATE", "5M")
     video_pixel_format = os.environ.get("VIDEO_PIXEL_FORMAT") or None
+    video_gop_size = int(os.environ.get("VIDEO_GOP_SIZE", "60"))
+    pipeline_depth = int(os.environ.get("PIPELINE_DEPTH", "2"))
+    video_input_mode = os.environ.get("VIDEO_INPUT_MODE", "rgb24")
+    cuda_p010_bridge = Path(os.environ.get("CUDA_P010_BRIDGE", "/app/src/libffmpeg_cuda_chw_bridge.so"))
+    video_output_mode = os.environ.get("VIDEO_OUTPUT_MODE", "stdin")
+    cuda_nvenc_bridge = Path(os.environ.get("CUDA_NVENC_BRIDGE", "/app/src/libffmpeg_cuda_chw_bridge.so"))
+    video_postprocess_mode = os.environ.get("VIDEO_POSTPROCESS_MODE", "engine-output")
+    srvgg_tail_weights_env = os.environ.get("SRVGG_TAIL_WEIGHTS") or None
+    srvgg_tail_weights = Path(srvgg_tail_weights_env) if srvgg_tail_weights_env else None
+    srvgg_tail_kernel = os.environ.get("SRVGG_TAIL_KERNEL", "2x2-rgb")
     trt_cuda_tool = Path(os.environ.get("TRT_CUDA_TOOL", "/app/src/worker.py"))
 
     if not data_dir.is_dir():
@@ -66,9 +77,19 @@ def main() -> int:
     if runner != "trt-cuda":
         raise SystemExit(f"ERROR: unsupported RUNNER={runner}. This image only supports RUNNER=trt-cuda.")
     print(f"TRT_ENGINE_PATH={trt_engine_override or 'auto'}", flush=True)
+    print(f"TRT_ENGINE_SIZE={trt_engine_size_override or 'auto'}", flush=True)
     print(f"VIDEO_ENCODER={video_encoder}", flush=True)
     print(f"VIDEO_BITRATE={video_bitrate}", flush=True)
     print(f"VIDEO_PIXEL_FORMAT={video_pixel_format or 'auto'}", flush=True)
+    print(f"VIDEO_GOP_SIZE={video_gop_size}", flush=True)
+    print(f"PIPELINE_DEPTH={pipeline_depth}", flush=True)
+    print(f"VIDEO_INPUT_MODE={video_input_mode}", flush=True)
+    print(f"CUDA_P010_BRIDGE={cuda_p010_bridge}", flush=True)
+    print(f"VIDEO_OUTPUT_MODE={video_output_mode}", flush=True)
+    print(f"CUDA_NVENC_BRIDGE={cuda_nvenc_bridge}", flush=True)
+    print(f"VIDEO_POSTPROCESS_MODE={video_postprocess_mode}", flush=True)
+    print(f"SRVGG_TAIL_WEIGHTS={srvgg_tail_weights or 'none'}", flush=True)
+    print(f"SRVGG_TAIL_KERNEL={srvgg_tail_kernel}", flush=True)
     print(f"TRT_CUDA_TOOL={trt_cuda_tool}", flush=True)
     print(f"GPU_STATUS={gpu_status()}", flush=True)
 
@@ -113,7 +134,13 @@ def main() -> int:
             model = "realesr-general-x4v3"
         engines = available_engines(model_dir, model)
         engine_size = choose_engine_size(info.width, info.height, target_width, target_height, engines)
-        if trt_engine_override:
+        if trt_engine_size_override:
+            try:
+                engine_width_text, engine_height_text = trt_engine_size_override.lower().split("x", 1)
+                engine_width, engine_height = int(engine_width_text), int(engine_height_text)
+            except ValueError as exc:
+                raise SystemExit(f"ERROR: invalid TRT_ENGINE_SIZE={trt_engine_size_override}, expected WIDTHxHEIGHT") from exc
+        elif trt_engine_override:
             engine_width, engine_height = info.width, info.height
         elif engine_size:
             engine_width, engine_height = engine_size
@@ -157,11 +184,19 @@ def main() -> int:
 
     print(f"\nTask plan: {len(tasks)} video(s) will be processed.", flush=True)
     for index, task in enumerate(tasks, 1):
+        planned_engine = (
+            Path(trt_engine_override)
+            if trt_engine_override
+            else model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-conv48-fp16.engine"
+            if video_postprocess_mode == "srvgg-conv48-tail"
+            else model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-fp16.engine"
+        )
         print(f"{index}. {task.input}", flush=True)
         print(f"   input: {task.info.width}x{task.info.height}, {task.info.frames or 'unknown'} frames", flush=True)
         print(f"   output: {task.output}", flush=True)
         print(f"   model: {task.model}", flush=True)
         print(f"   engine input: {task.engine_width}x{task.engine_height}", flush=True)
+        print(f"   engine path: {planned_engine}", flush=True)
         print(f"   outscale: {task.outscale:g}", flush=True)
 
     if dry_run:
@@ -172,11 +207,14 @@ def main() -> int:
         print(f"\nProcessing {index}/{len(tasks)}: {task.input}", flush=True)
         from runner import run_trt_cuda_task
 
-        trt_engine_path = (
-            Path(trt_engine_override)
-            if trt_engine_override
-            else model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-fp16.engine"
-        )
+        if trt_engine_override:
+            trt_engine_path = Path(trt_engine_override)
+        elif video_postprocess_mode == "srvgg-conv48-tail":
+            if task.model not in {"realesr-general-x4v3", "realesr-general-wdn-x4v3"}:
+                raise SystemExit(f"ERROR: VIDEO_POSTPROCESS_MODE=srvgg-conv48-tail does not support model={task.model}")
+            trt_engine_path = model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-conv48-fp16.engine"
+        else:
+            trt_engine_path = model_dir / f"{task.model}-{task.engine_width}x{task.engine_height}-fp16.engine"
         run_trt_cuda_task(
             task,
             trt_engine_path,
@@ -187,6 +225,15 @@ def main() -> int:
             video_bitrate,
             video_pixel_format,
             trt_cuda_tool,
+            pipeline_depth,
+            video_gop_size,
+            video_input_mode,
+            cuda_p010_bridge,
+            video_output_mode,
+            cuda_nvenc_bridge,
+            video_postprocess_mode,
+            srvgg_tail_weights,
+            srvgg_tail_kernel,
         )
 
     print(f"\nDone. processed tasks: {len(tasks)}", flush=True)

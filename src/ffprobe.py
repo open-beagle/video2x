@@ -49,22 +49,24 @@ def _parse_float(value: object) -> float | None:
         return None
 
 
-def probe_video(path: Path) -> VideoInfo:
-    data = _run_json(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",
-            "-show_entries",
-            "stream=width,height,avg_frame_rate,nb_frames,nb_read_frames:format=duration",
-            "-of",
-            "json",
-            str(path),
-        ]
-    )
+def probe_video(path: Path, count_frames: bool = False) -> VideoInfo:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+    ]
+    if count_frames:
+        cmd.append("-count_frames")
+    cmd += [
+        "-show_entries",
+        "stream=width,height,avg_frame_rate,nb_frames,nb_read_frames:format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    data = _run_json(cmd)
     streams = data.get("streams") or []
     if not streams:
         raise ValueError("no video stream")

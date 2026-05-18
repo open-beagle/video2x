@@ -36,6 +36,36 @@ build_engine() {
     --fp16
 }
 
+build_conv48_engine() {
+  local model="$1"
+  local width="$2"
+  local height="$3"
+  local onnx="$4"
+  local conv48_onnx="${MODEL_DIR}/${model}-${width}x${height}-conv48.onnx"
+  local conv48_engine="${MODEL_DIR}/${model}-${width}x${height}-conv48-fp16.engine"
+  local conv48_tail="${MODEL_DIR}/${model}-tail-${width}x${height}-conv48.npz"
+
+  if [[ "${model}" != "realesr-general-x4v3" && "${model}" != "realesr-general-wdn-x4v3" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "${conv48_onnx}" ]]; then
+    python /app/tools/split_srvgg_tail_onnx.py \
+      --input "${onnx}" \
+      --output "${conv48_onnx}" \
+      --tail-weights "${conv48_tail}" \
+      --split-at post-conv
+  else
+    echo "conv48 ONNX exists: ${conv48_onnx}"
+  fi
+
+  if [[ ! -f "${conv48_engine}" ]]; then
+    build_engine "${conv48_onnx}" "${conv48_engine}"
+  else
+    echo "conv48 engine exists: ${conv48_engine}"
+  fi
+}
+
 model_supported() {
   local name="$1"
   local supported
@@ -110,6 +140,8 @@ for model in "${MODELS[@]}"; do
     else
       echo "engine exists: ${engine}"
     fi
+
+    build_conv48_engine "${model}" "${width}" "${height}" "${onnx}"
   done
 done
 

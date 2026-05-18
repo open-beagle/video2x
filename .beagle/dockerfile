@@ -21,6 +21,30 @@ RUN python3 /app/tools/extract_postprocess_kernel.py \
         /tmp/postprocess.cu \
         -o /tmp/postprocess.ptx
 
+FROM nvidia/cuda:13.2.1-devel-ubuntu24.04 AS bridge-builder
+
+RUN apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libavcodec-dev \
+        libavformat-dev \
+        libavutil-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY src/native/ffmpeg_cuda_chw_bridge.cu /app/src/native/ffmpeg_cuda_chw_bridge.cu
+RUN nvcc /app/src/native/ffmpeg_cuda_chw_bridge.cu \
+        -o /tmp/libffmpeg_cuda_chw_bridge.so \
+        --shared \
+        -Xcompiler -fPIC \
+        --std=c++17 \
+        -arch=sm_89 \
+        -Xcompiler "$(pkg-config --cflags libavformat libavcodec libavutil)" \
+        $(pkg-config --libs libavformat libavcodec libavutil) \
+        -lcuda
+
 FROM ${BASE}
 
 ARG AUTHOR
@@ -46,6 +70,7 @@ WORKDIR /app
 
 COPY src /app/src
 COPY --from=kernel-builder /tmp/postprocess.ptx /app/src/postprocess.ptx
+COPY --from=bridge-builder /tmp/libffmpeg_cuda_chw_bridge.so /app/src/libffmpeg_cuda_chw_bridge.so
 COPY .beagle/hooks/nvenc_ioctl_hook.so /opt/hooks/nvenc_ioctl_hook.so
 COPY requirements.txt /app/requirements.txt
 
@@ -67,6 +92,22 @@ RUN python3 -m pip install --no-cache-dir --no-compile --break-system-packages \
 COPY .beagle/entrypoint.sh /usr/local/bin/video2x-entrypoint
 RUN chmod +x /usr/local/bin/video2x-entrypoint /opt/hooks/nvenc_ioctl_hook.so
 
+RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+        sed -i \
+          's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+          /etc/apt/sources.list.d/ubuntu.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i \
+          's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+          /etc/apt/sources.list; \
+    fi \
+    && mkdir -p /etc/pip \
+    && printf '%s\n' \
+        '[global]' \
+        'index-url = https://mirrors.aliyun.com/pypi/simple/' \
+        'trusted-host = mirrors.aliyun.com' \
+        > /etc/pip.conf
+
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility \
     DATA_DIR=/data \
     TARGET_WIDTH=1920 \
@@ -78,6 +119,14 @@ ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility \
     VIDEO_ENCODER=hevc_nvenc \
     VIDEO_BITRATE=5M \
     VIDEO_PIXEL_FORMAT=nv12 \
+    VIDEO_GOP_SIZE=60 \
+    PIPELINE_DEPTH=2 \
+    VIDEO_INPUT_MODE=rgb24 \
+    VIDEO_OUTPUT_MODE=stdin \
+    VIDEO_POSTPROCESS_MODE=engine-output \
+    SRVGG_TAIL_KERNEL=2x2-rgb \
+    CUDA_P010_BRIDGE=/app/src/libffmpeg_cuda_chw_bridge.so \
+    CUDA_NVENC_BRIDGE=/app/src/libffmpeg_cuda_chw_bridge.so \
     OUTPUT_SUFFIX=_1080p \
     SKIP_EXISTING=true \
     MODEL_DIR=/models \
