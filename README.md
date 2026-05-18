@@ -85,3 +85,19 @@ video2x:0.3.0-build
 ## 状态
 
 当前 `CUDA NV12 + HEVC NVENC` 完整 5 分钟样本回归已通过：420p `72fps+`，720p `46fps+`。人工画质评审结论为“尚可”，下一步重点是真正 Zero-Copy 管线。
+
+## CI
+
+```powershell
+# build
+git switch build ;`
+  git merge main --ff-only ;`
+  git push origin build ;`
+  git switch main
+
+# release
+git switch release ;`
+  git merge main --ff-only ;`
+  git push origin release ;`
+  git switch main
+```
