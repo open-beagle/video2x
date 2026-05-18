@@ -32,7 +32,19 @@ https://github.com/open-beagle/video2x
 
 这些数据说明旧方案没有充分释放 RTX 4090 性能。新项目必须围绕这个问题重做处理链路，而不是只改容器封装。
 
-新方案必须避免这条低效路径，默认使用官方 Real-ESRGAN Python/CUDA 方案，通过 `RealESRGAN_x2plus` 和合适的 `outscale` 将 720p 视频直接产出最终 1080p 成品。
+新方案必须避免这条低效路径。早期探索过官方 Real-ESRGAN Python/CUDA 与 `RealESRGAN_x2plus + outscale`，但实测后已经确认它不能作为速度主线。
+
+0.3.0 实测后，主线已经从早期 PyTorch/outscale 方案升级为 TensorRT/ZeroCopy 方案：
+
+```text
+realesr-general-x4v3
+-> TensorRT FP16 engine
+-> NVDEC CUDA/P010 input
+-> CUDA/NV12 AVFrame output
+-> NVENC HEVC
+```
+
+`RealESRGAN_x2plus` 仍保留为通用真实场景质量参考，但它在 TensorRT FP16 下仍然太慢，不再作为 720p 速度主线。
 
 ## 2. 性能目标
 
@@ -43,7 +55,7 @@ https://github.com/open-beagle/video2x
 第一阶段目标：
 
 - 明显快于 Video2X 6.4.0 `realesrgan-plus-x4` 方案。
-- 720p 到 1080p 不允许先 AI 计算到 2880p。
+- 720p 到 1080p 的性能线必须避免完整 x4 大图进入 CPU 往返。
 - 480p 视频也必须输出最终 1080p。
 - 单卡 RTX 4090 上运行时必须优先让瓶颈接近 GPU 推理，而不是 Python、ffmpeg、磁盘 IO 或错误的模型倍率。
 - 默认直接处理并持续显示实时 fps、百分比和预计剩余时间。
@@ -54,8 +66,17 @@ https://github.com/open-beagle/video2x
 - 2 小时 30fps 视频约为 216000 帧。
 - 如果希望 2 小时 30fps 视频在 2 小时内处理完成，实际处理速度需要达到约 30fps。
 - 本项目第一阶段按 30fps 输入视频设计和验收，不以 60fps 视频作为默认目标。
+- 0.3.0 已经把 720p 性能线推进到 `60fps+`。
 - 720p 到 1080p 的最终倍率为 `1.5`。
 - 480p 到 1080p 的最终倍率为 `2.25`，需要单独验证模型选择、质量和速度。
+
+0.3.0 正式镜像回归：
+
+| 路线 | 完整 5 分钟样本 fps | 2 小时 30fps 估算 |
+| ---- | ------------------- | ----------------- |
+| 420p ZeroCopy | `142.033` | 约 `25.3` 分钟 |
+| 720p `960x540 conv48` 性能线 | `77.106` | 约 `46.7` 分钟 |
+| 720p `1280x720 conv48` 质量线 | `45.124` | 约 `79.8` 分钟 |
 
 因此，本项目不能只声称“更快”，必须记录实际处理 fps、GPU 利用率、显存占用和估算整片耗时。benchmark 样本可以用于对比测试，但正式使用路径必须默认直接干活。
 
@@ -65,8 +86,8 @@ https://github.com/open-beagle/video2x
 
 - GPU 型号：例如 RTX 4090。
 - 输入视频分辨率、帧率、总帧数。
-- 模型名称：默认 `RealESRGAN_x2plus`。
-- `outscale`：720p 到 1080p 默认 `1.5`，480p 到 1080p 默认 `2.25`。
+- 模型名称和 engine：当前速度主线为 `realesr-general-x4v3` TensorRT FP16。
+- 路线：`performance` 使用 `960x540 conv48 ZeroCopy`，`quality` 使用 `1280x720 conv48 ZeroCopy`。
 - `tile` 参数。
 - 实测 fps。
 - GPU 利用率和显存占用。

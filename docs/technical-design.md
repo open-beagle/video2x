@@ -1,330 +1,206 @@
 # AI 视频超分批处理工具技术方案
 
+## 0. 0.3.0 当前技术方案
+
+0.3.0 已经从早期 PyTorch/outscale 方案升级为 TensorRT/ZeroCopy 方案。当前 runtime 主线是：
+
+```text
+NVDEC CUDA/P010
+-> CUDA P010 to NCHW FP16
+-> TensorRT FP16
+-> CUDA/NV12 AVFrame
+-> NVENC HEVC
+-> faststart MP4 + audio copy
+```
+
+正式镜像回归：
+
+| 路线 | 完整 5 分钟样本 fps | 输出 |
+| ---- | ------------------- | ---- |
+| 420p ZeroCopy | `142.033` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p `960x540 conv48` 性能线 | `77.106` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p `1280x720 conv48` 质量线 | `45.124` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+
+因此 0.3.0 可以作为当前发布版本。后续阶段不再围绕“能不能超过 30fps”打转，而是继续推进默认策略、C++ runner、TensorRT Plugin 和 FlashVSR 竞品验证。
+
 ## 1. 总体方案
 
-本项目实现一个面向批量真人视频的 AI 超分容器。核心处理链路采用官方 Real-ESRGAN Python/CUDA，而不是 Video2X 6.4.0 的 ncnn/Vulkan Real-ESRGAN。
+本项目实现一个面向批量真人视频的 AI 超分容器。核心目标是把低于 1080p 的 `.mp4` 视频批量输出为标准 `1920x1080` 成品，并充分释放单张 RTX 4090 的性能。
 
-技术设计的第一优先级是速度。实现必须围绕单张 RTX 4090 的吞吐设计，避免 GPU 等 CPU、等 ffmpeg、等磁盘、等 Python 串行调度。只要 GPU 利用率长期偏低，就必须把它视为性能缺陷，而不是正常现象。
-
-核心原因：
-
-- Video2X 6.4.0 的 `realesrgan-plus` 只有 x4 ncnn 模型。
-- 720p 输入会被 AI 处理成 2880p，计算量过大。
-- RTX 4090 上旧方案 GPU 使用率约 `60%`，显存占用约 `1.2GB`，单个长视频预计耗时约 `170` 小时，没有充分释放硬件性能。
-- 官方 Real-ESRGAN 提供 `RealESRGAN_x2plus.pth`，并支持 `outscale` 浮点倍率。
-- 720p 到 1080p 可走 `RealESRGAN_x2plus` + `outscale=1.5`。
+旧 Video2X 6.4.0 的 `realesrgan-plus-x4` 路线会把 720p 先 AI 放大到 2880p，再得到名为 1080p 的输出，导致速度和资源利用都不可接受。0.3.0 不再使用该路线，也不再把官方 PyTorch 视频脚本作为性能主线。
 
 ## 2. 推荐技术栈
 
-- Python 3
-- PyTorch CUDA 版本
-- 官方 Real-ESRGAN
-- ffmpeg / ffprobe
-- Python 主控程序
-- Bash entrypoint 只负责启动 Python
-- Docker
+runtime 镜像：
 
-可选：
+- CUDA runtime。
+- FFmpeg / ffprobe。
+- TensorRT Python runtime。
+- `cuda-python` / `numpy`。
+- 本项目 `src/` worker。
+- 原生 CUDA bridge：`libffmpeg_cuda_chw_bridge.so`。
+- 预编译后处理 PTX：`postprocess.ptx`。
+- NVENC hook：`nvenc_ioctl_hook.so`。
 
-- `nvidia-smi` 用于运行时诊断。
-- `opencv-python-headless` 用于视频帧处理依赖。
+build 镜像：
 
-## 3. 镜像设计
+- PyTorch / torchvision。
+- Real-ESRGAN 模型结构。
+- ONNX / onnxscript。
+- TensorRT 构建工具。
+- `trtexec`。
 
-基础镜像跟随 Jasna 的 CUDA runtime 路线：
+运行镜像不包含 PyTorch、ONNX 导出依赖和 engine 构建工具。`.pth -> .onnx -> .engine` 全部由 build 镜像负责。
 
-```dockerfile
-FROM nvidia/cuda:<cuda-runtime-tag>-runtime-ubuntu24.04
-```
+## 3. 镜像职责
 
-构建步骤：
-
-1. 安装系统依赖：`ffmpeg`、`libgl1`、`libglib2.0-0`、`wget`。
-2. 安装 PyTorch CUDA 版本和 Real-ESRGAN Python 依赖。
-3. 复制本项目 `vendor/realesrgan` 中的 Real-ESRGAN Python 源码。
-4. 不在镜像构建阶段下载或打包模型权重。
-5. 复制本项目 `src/` 和 `entrypoint.sh`。
-
-源码策略：
+runtime 镜像只做业务处理：
 
 ```text
-src/
-vendor/realesrgan
+扫描 /data -> 选择 /models 下已有 engine -> TensorRT 推理 -> 输出 MP4
 ```
 
-本项目自己的扫描、规划、模型、GPU 监控和运行编排代码放在 `src/`。
+runtime 不负责：
 
-Real-ESRGAN Python 代码必须在本项目内，便于后续修改日志、模型路径、性能管线和编码策略。
+- 自动下载模型。
+- 从 `.pth` 导出 ONNX。
+- 从 ONNX 构建 TensorRT engine。
+- 为未知分辨率动态生成 engine。
 
-模型目录：
+build 镜像负责：
 
 ```text
-/models/RealESRGAN_x2plus.pth
-/models/RealESRGAN_x4plus.pth
+.pth -> FP16 .onnx -> FP16 .engine
 ```
 
-模型不进入镜像。容器运行时优先读取 `/models`，缺失时按需下载到 `/models`。
+对 `realesr-general-x4v3` 和 `realesr-general-wdn-x4v3`，build 镜像还会生成 `-conv48-fp16.engine` 和对应 tail 参数，供 `VIDEO_POSTPROCESS_MODE=srvgg-conv48-tail` 使用。
 
 ## 4. 入口流程
 
 入口脚本执行流程：
 
-1. 校验 `ffmpeg`、`ffprobe`、`python`、CUDA 可用性。
+1. 校验 `/data`、`/models`、GPU 和 FFmpeg。
 2. 扫描 `DATA_DIR` 下 `.mp4` 文件。
-3. 跳过：
-   - `*_1080p.mp4`
-   - 输出文件已存在且 `SKIP_EXISTING=true`
-   - 高度大于等于 `TARGET_HEIGHT` 的视频
-4. 读取输入视频：
-   - 宽度
-   - 高度
-   - 帧率
-   - 总帧数
-   - 时长
-5. 为每个视频生成任务：
-   - 输出路径
-   - 模型
-   - `outscale`
-   - `tile`
-   - 预计处理方式
-6. 打印完整任务清单。
+3. 跳过 `*_1080p.mp4`、已存在输出、1080p 及以上视频。
+4. 读取输入宽高、帧率、总帧数、时长。
+5. 选择已有 TensorRT engine。
+6. 打印任务清单。
 7. 默认直接执行正式处理。
-8. 运行中持续打印帧进度、实时 fps、百分比、预计剩余时间、GPU 利用率和显存占用。
-9. 处理完成后用 `ffprobe` 验证输出高度和可读性。
+8. 运行中持续打印帧进度、实时 fps、百分比、预计剩余时间和 GPU 状态。
+9. 处理完成后验证输出宽高、帧数、音频、seek 和 `ffprobe` 可读性。
 
-## 5. 模型与倍率决策
+输出文件必须生成在输入文件同目录，方便人工质检从挂载目录直接取回。
 
-默认决策函数：
+## 5. 模型与分辨率决策
 
-```text
-target_height = 1080
-outscale = target_height / input_height
-```
-
-720p：
+当前速度主线：
 
 ```text
-input_height = 720
-outscale = 1.5
-model = RealESRGAN_x2plus
+realesr-general-x4v3 TensorRT FP16
 ```
 
-命令：
+`RealESRGAN_x2plus` 是通用真实场景质量参考，但在当前基线中速度太慢，不作为 720p 主线。
 
-```bash
-python inference_realesrgan_video.py \
-  -i input.mp4 \
-  -o output_dir \
-  -n RealESRGAN_x2plus \
-  -s 1.5 \
-  --suffix 1080p \
-  --tile 0
-```
+720p 有两条路线：
 
-注意：官方 `inference_realesrgan_video.py` 的 `-o` 是输出目录，不是输出文件路径；GPU 绑定通过容器可见设备或 `CUDA_VISIBLE_DEVICES` 控制，不使用不存在的 `--gpu-id` 参数。
+- 性能线：`1280x720 -> 960x540 conv48 engine -> 1920x1080`，正式镜像 `77.106fps`。
+- 质量线：`1280x720 -> 1280x720 conv48 engine -> 1920x1080`，正式镜像 `45.124fps`。
 
-`RealESRGAN_x2plus` 模型内部是 x2 网络，`outscale=1.5` 表示最终输出缩放倍率。这样避免 Video2X x4 路线把 720p 先计算到 2880p。
+420p 样本兼容路线：
 
-低分辨率策略需要实测：
+- `720x420` engine，正式镜像 `142.033fps`。
 
-- 540p-719p：优先 `RealESRGAN_x2plus`。
-- 480p：输出 1080p，`outscale=2.25`，必须单独评估 `RealESRGAN_x2plus` 与 `RealESRGAN_x4plus` 的速度、质量和 GPU 利用率。
-- 360p-539p：评估 `RealESRGAN_x2plus` 与 `RealESRGAN_x4plus`。
-- 低于 360p：默认不自动处理，除非用户显式允许。
+1080p 及以上输入默认跳过，不做超分。
 
-## 6. 速度与监控
+## 6. ZeroCopy 视频链路
 
-默认路径必须直接处理正式视频，并持续输出足够让用户决策的进度日志。
-
-运行中必须记录：
-
-- 当前帧和总帧数。
-- 实时 fps。
-- 百分比。
-- 预计剩余时间。
-- GPU 利用率。
-- 显存占用。
-- 当前模型、`outscale`、`tile`。
-
-如果 GPU 利用率长期偏低，需要在日志中暴露可能瓶颈：
-
-- 解码速度不足。
-- 编码速度不足。
-- 磁盘读写不足。
-- Python 单进程调度不足。
-- `tile` 设置过小导致切块开销过大。
-- 模型或倍率选择不合理。
-
-## 7. Benchmark 模式
-
-必须实现可选 benchmark 模式，用来让用户在正式处理前做决策。benchmark 不是默认流程。
-
-环境变量：
-
-```bash
-BENCHMARK_FRAMES=300
-```
-
-处理方式：
-
-1. 先用 ffmpeg 截取前 N 帧或前 N/帧率 秒为临时样本。
-2. 对临时样本运行完整 AI 超分。
-3. 记录耗时、fps、显存、输出尺寸。
-4. 按总帧数估算整片耗时。
-
-输出示例：
+高性能模式使用：
 
 ```text
-Benchmark:
-  input: INU-047-U.mp4
-  frames: 300 / 303298
-  model: RealESRGAN_x2plus
-  outscale: 1.5
-  speed: 8.2 fps
-  estimated full time: 10h 16m
+VIDEO_INPUT_MODE=cuda-p010
+VIDEO_OUTPUT_MODE=cuda-nvenc
 ```
 
-## 8. 多 GPU 策略
+输入侧：
 
-单个视频默认绑定一张 GPU。不要假设一个视频能自动拆到多张 GPU。
+- FFmpeg C API / NVDEC 读取 CUDA/P010 surface。
+- CUDA kernel 直接把 P010 转为 NCHW FP16。
+- 不再走 CPU raw RGB，也不再做 raw RGB H2D。
 
-推荐运行方式：
+输出侧：
 
-```bash
-docker run --name realesrgan-gpu3 \
-  --device nvidia.com/gpu=3 \
-  -d --rm \
-  -e GPU_ID=0 \
-  -v /path/to/data:/data \
-  open-beagle/video2x:latest
-```
+- CUDA 后处理直接写入 FFmpeg 分配的 CUDA/NV12 AVFrame。
+- `hevc_nvenc` 从 CUDA surface 编码。
+- 不再每帧 D2H rawvideo，也不再通过 ffmpeg stdin 喂帧。
 
-因为容器里只暴露了一张 GPU，`GPU_ID=0` 通常就是容器内可见的第一张卡。
+MP4 封装：
 
-多目录并行：
+- 音频复制。
+- `VIDEO_GOP_SIZE=60`。
+- `+faststart`，确保输出可快速拖拽播放。
 
-```text
-GPU 3 -> /path/to/data-shard-0
-GPU 4 -> /path/to/data-shard-1
-```
+## 7. 配置项
 
-## 9. 输出编码
-
-输出编码必须服从速度目标。官方脚本默认使用 `libx264`，如果它导致 RTX 4090 等待 CPU 编码，就不能把它视为最终最优路径。
-
-- 不允许用 ffmpeg 替代 AI 超分。
-- 允许用 ffmpeg 做封装、音频复制、元数据修复、faststart。
-- 输出必须可被 `ffprobe` 读取。
-- 如果 CPU 编码成为瓶颈，应评估 NVENC、预设参数或封装流程优化。
-- 如果磁盘 IO 成为瓶颈，应评估临时目录、输出目录和并发策略。
-
-如需重新封装：
-
-```bash
-ffmpeg -hide_banner -y \
-  -i ai_output.mp4 \
-  -c copy \
-  -movflags +faststart \
-  final_1080p.mp4
-```
-
-## 10. 日志要求
-
-启动日志必须包含：
+常用环境变量：
 
 ```text
 DATA_DIR=/data
 TARGET_HEIGHT=1080
-MODEL_NAME=RealESRGAN_x2plus
+OUTPUT_SUFFIX=_1080p
+SKIP_EXISTING=true
+TRT_ENGINE_PATH=auto
+TRT_ENGINE_SIZE=auto
+VIDEO_INPUT_MODE=cuda-p010
+VIDEO_OUTPUT_MODE=cuda-nvenc
+VIDEO_POSTPROCESS_MODE=engine-output
+VIDEO_GOP_SIZE=60
 GPU_ID=0
-TILE=0
 ```
 
-任务清单必须包含：
+720p 性能线通常使用：
 
 ```text
-1. /data/INU-047-U.mp4
-   input: 1280x720, 303298 frames
-   output: /data/INU-047-U_1080p.mp4
-   model: RealESRGAN_x2plus
-   outscale: 1.5
+TRT_ENGINE_SIZE=960x540
+VIDEO_POSTPROCESS_MODE=srvgg-conv48-tail
 ```
 
-运行中必须包含：
+## 8. 多 GPU 策略
 
-- 当前帧
-- 总帧数
-- fps
-- 百分比
-- 预计剩余时间
-- GPU 利用率
-- 显存占用
+单个容器默认绑定一张 GPU。多卡并发建议按目录或任务分片运行多个容器：
 
-## 11. 错误处理
+```bash
+docker run --rm \
+  --device nvidia.com/gpu=1 \
+  -e GPU_ID=0 \
+  -v /path/to/data:/data \
+  -v /path/to/models:/models \
+  video2x:0.3.0
+```
+
+容器内通常只看见一张 GPU，因此 `GPU_ID=0` 表示容器内可见设备。NVENC 多卡场景依赖 CDI 设备、CUDA primary context 和 NVENC hook 保持一致。
+
+## 9. 错误处理
 
 必须失败退出的情况：
 
 - 输入目录不存在。
 - GPU 不可用。
-- 模型文件不存在且无法下载。
+- `/models` 缺少可用 TensorRT engine。
 - 输出文件生成失败。
-- 输出不是目标高度。
+- 输出不是目标高度或 `ffprobe` 不可读。
 
 可以跳过的情况：
 
 - 输入文件不可读。
 - 已存在输出文件。
-- 输入高度已经大于等于目标高度。
+- 输入高度已经大于等于 1080p。
+- 没有匹配 engine 且选择规则判定不应强行变形。
 
-## 12. 与旧 Video2X 方案的区别
+## 10. 下一阶段
 
-旧方案：
+0.3.0 已完成发布主线。下一阶段重点：
 
-```text
-Video2X 6.4.0
-realesrgan-plus-x4
-720p -> 2880p
-速度约 0.53 fps
-RTX 4090 GPU 使用率约 60%
-RTX 4090 显存占用约 1.2GB
-单个长视频预计约 170 小时
-```
-
-新方案：
-
-```text
-官方 Real-ESRGAN Python/CUDA
-RealESRGAN_x2plus
-720p -> 1080p final outscale
-默认直接处理，运行中实时显示 fps 和预计剩余时间
-```
-
-核心改进：
-
-- 不再把 720p 真人视频默认 x4 到 2880p。
-- 不再受 ncnn 模型目录缺少 `realesrgan-plus-x2` 的限制。
-- 使用官方 `.pth` 模型和 Python 推理脚本。
-
-## 13. 第一阶段交付
-
-第一阶段只做最小可用版本：
-
-- Dockerfile
-- entrypoint.sh
-- 官方 Real-ESRGAN 集成
-- 默认模型 `RealESRGAN_x2plus`
-- 递归扫描 `/data`
-- 720p 到 1080p
-- 480p 到 1080p
-- 1080p 跳过
-- 运行中 fps、预计剩余时间、GPU 利用率和显存日志
-- 可选 benchmark 模式
-- README 运行示例
-
-第一阶段不做：
-
-- GUI
-- Web API
-- 分布式调度
-- 自动画质评分
-- 复杂队列系统
+- 默认策略收敛：`performance` / `quality` profile 自动化。
+- TensorRT Plugin：融合 PixelShuffle + Downsample，减少 720p direct 的 x4 中间 tensor。
+- C++ runner：统一 FFmpeg、TensorRT、CUDA stream/event 和 NVENC，降低 Python/ctypes 调度开销。
+- FlashVSR：作为 P0 竞品验证线，用真实 420p/720p 样本对比速度、画质和时序一致性。

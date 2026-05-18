@@ -1,12 +1,36 @@
 # 性能竞品分析
 
+## 0. 0.3.0 最新结论
+
+0.3.0 正式 build/runtime 镜像已经发布并完成服务器回归。当前性能主线已经从早期 PyTorch/CPU 视频链路升级为：
+
+```text
+NVDEC CUDA/P010
+-> CUDA P010 to NCHW FP16
+-> TensorRT FP16
+-> CUDA/NV12 AVFrame
+-> NVENC HEVC
+```
+
+正式镜像结果：
+
+| 输入 | 路线 | 完整 5 分钟样本 fps | 2 小时 30fps 估算 | 判断 |
+| ---- | ---- | ------------------- | ----------------- | ---- |
+| 420p | `720x420` engine ZeroCopy | `142.033` | 约 `25.3` 分钟 | 已远超实时 |
+| 720p | `960x540 conv48 ZeroCopy` 性能线 | `77.106` | 约 `46.7` 分钟 | 当前 60fps+ 主线 |
+| 720p | `1280x720 conv48 ZeroCopy` 质量线 | `45.124` | 约 `79.8` 分钟 | 质量对照线 |
+
+三条输出均为 `1920x1080 / 30fps / 9103 frames / HEVC / AAC`，`keyframes=152`，`moov_offset_first_4k=32`。
+
+因此下方早期基线保留为演进记录；当前判断以本节为准。
+
 ## 当前基线
 
 实测硬件：RTX 4090，单容器单 GPU，输出统一为 1920x1080。
 
 | 输入 | 模型                                                                       | 实测 fps | 5 分钟 30fps | 2 小时 30fps | 判断                           |
 | ---- | -------------------------------------------------------------------------- | -------- | ------------ | ------------ | ------------------------------ |
-| 720p | RealESRGAN_x2plus                                                          | 2.798    | 约 53.6 分钟 | 约 21.4 小时 | 太慢                           |
+| 720p | RealESRGAN_x2plus                                                          | 2.798    | 约 53.6 分钟 | 约 21.4 小时 | 太慢，淘汰为速度主线           |
 | 420p | RealESRGAN_x4plus                                                          | 2.042    | 约 73.5 分钟 | 约 29.4 小时 | 淘汰                           |
 | 420p | realesr-general-x4v3                                                       | 4.583    | 约 32.7 分钟 | 约 13.1 小时 | 当前最快基线                   |
 | 420p | realesr-general-x4v3 TensorRT FP16 纯推理                                  | 149.447  | 约 1.0 分钟  | 约 24.1 分钟 | 模型算力充足，需接视频管线     |
@@ -21,9 +45,12 @@
 | 720p | RealESRGAN_x2plus TensorRT FP16 纯推理                                     | 10.475   | 约 14.3 分钟 | 约 5.73 小时 | 模型太重，淘汰                 |
 | 720p | 预缩 540p + realesr-general-x4v3 TensorRT FP16 纯推理                      | 78.179   | 约 1.9 分钟  | 约 46.1 分钟 | 模型侧达标                     |
 | 720p | 预缩 540p + RUNNER=trt-cuda CLI                                            | 39.758   | 约 3.8 分钟  | 约 1.51 小时 | 速度达标，需画质确认           |
-| 720p | 预缩 540p + RUNNER=trt-cuda + HEVC 5M                                      | 34.554   | 约 4.3 分钟  | 约 1.74 小时 | 成品压缩达标                   |
+| 720p | 预缩 540p + RUNNER=trt-cuda + HEVC 5M                                      | 34.554   | 约 4.3 分钟  | 约 1.74 小时 | 已被 ZeroCopy 性能线替代       |
+| 420p | 0.3.0 正式镜像 ZeroCopy                                                    | 142.033  | 约 1.1 分钟  | 约 25.3 分钟 | 当前正式主线                   |
+| 720p | 0.3.0 正式镜像 960x540 conv48 ZeroCopy                                     | 77.106   | 约 2.0 分钟  | 约 46.7 分钟 | 当前 60fps+ 性能线             |
+| 720p | 0.3.0 正式镜像 1280x720 conv48 ZeroCopy                                    | 45.124   | 约 3.4 分钟  | 约 79.8 分钟 | 当前质量线                     |
 
-目标是 2 小时 30fps 视频在 2 小时内完成，至少需要 30 fps。当前最快 `realesr-general-x4v3` 只有 4.583 fps，缺口约 6.5 倍。
+目标是 2 小时 30fps 视频在 2 小时内完成，至少需要 30 fps。0.3.0 正式镜像已经在 420p、720p 性能线、720p 质量线三条路线都超过 30fps，其中 720p 性能线超过 60fps。
 
 TensorRT FP16 纯推理已经达到 `149.447 qps`，说明模型本身不再是 30fps 目标的主要瓶颈。接入真实 420p 视频闭环后，端到端速度为 `6.918 fps`，分段耗时显示最大瓶颈是 CPU 后处理：TRT 输出 `2880x1680` 后，再由 Python/OpenCV resize/pad 到 `1920x1080`，该段耗时 `14.410s`。改用 Desktop GStreamer `appsrc + cudascale` 后速度提升到 `8.163 fps`，但 `trt_to_appsrc_push=11.378s` 成为新瓶颈，说明问题已经收敛到 Python/Gst.Buffer 大图拷贝。后续主风险转移到视频管线：解码、预处理、GPU/CPU 拷贝、后处理、编码和音画同步。
 
@@ -44,11 +71,11 @@ TensorRT FP16 纯推理已经达到 `149.447 qps`，说明模型本身不再是 
 
 流水线正式镜像 `0.3.0` 在真实五分钟 420p 样本上达到 `69.026 fps`，输出校验为 `1920x1080`、`30fps`、`9103` 帧，音频保留。按该速度估算，2 小时 30fps 视频约 `52.2` 分钟完成。
 
-720p 固定尺寸 engine 已构建并跑通，输出同样校验通过。但 `realesr-general-x4v3` 会把 720p 中间放大到 `5120x2880`，再缩回 `1920x1080`，端到端只有 `24.774 fps`，低于实时目标。该结果说明 720p 不应该继续沿用 x4 中间帧路线，下一步应改为 x2 或 1.5x 专用路线，减少巨大中间帧带来的推理与预处理压力。
+720p 固定尺寸 engine 已构建并跑通。早期完整 x4 中间帧路线只有 `24.774 fps`，低于实时目标；后续通过 ZeroCopy 和 conv48 tail 折中路线，720p direct 质量线已达到 `45.124 fps`。如需 `60fps+`，当前采用 `960x540 conv48 ZeroCopy` 性能线。
 
-`RealESRGAN_x2plus` 的 TensorRT FP16 纯推理只有 `10.475 fps`，说明传统 x2 RRDBNet 模型本身过重，不适合作为 720p 速度主线。当前更有效的路线是先把 720p 预缩到 `960x540`，再使用轻量 `realesr-general-x4v3`，最后由 CUDA 后处理落到 `1920x1080`。这条路线在正式 CLI 中达到 `39.758 fps`，按 2 小时 30fps 视频估算约 `1.51` 小时完成。风险转移到画质：必须抽帧确认预缩 540p 没有明显损失人脸、字幕和细纹理。
+`RealESRGAN_x2plus` 的 TensorRT FP16 纯推理只有 `10.475 fps`，说明传统 x2 RRDBNet 模型本身过重，不适合作为 720p 速度主线。当前更有效的路线是 `960x540 conv48 ZeroCopy`：保留轻量 `realesr-general-x4v3`，由 CUDA bridge 在 GPU 上完成 P010 resize/preprocess，并由 CUDA/NV12 surface 直接交给 NVENC。正式镜像达到 `77.106 fps`，人工画质评审已接受作为性能线。
 
-成品输出默认应使用 HEVC 5M，而不是速度验证用的 `libx264 ultrafast CRF18`。300 帧短样本验证显示 `libx265 + 5M` 输出为 HEVC，实际视频码率约 `5.23Mbps`，10 秒文件约 `6.5MB`，端到端仍有 `34.554 fps`。因此成品压缩参数也能守住 30fps 目标。
+成品输出默认使用 `hevc_nvenc` 约 `5M`，不是早期速度验证用的 `libx264/libx265`。正式镜像输出码率约 `5.15Mbps`，音频复制，GOP=60，`+faststart`，可快速 seek。
 
 ## 最高推进指令
 
@@ -76,18 +103,18 @@ NVDEC -> GPU surface / CUDA memory -> TRT FP16 inference -> CUDA/NPP postprocess
 - 420p 非标准比例到 1920x1080 时，使用 CUDA/NPP 或硬件缩放/补边完成尺寸对齐。
 - 音频、帧率、时长必须保持同步。
 
-当前镜像能力检查：
+历史镜像能力检查：
 
 | 能力                | 当前状态 | 说明                                         |
 | ------------------- | -------- | -------------------------------------------- |
 | FFmpeg CUDA hwaccel | 已具备   | `ffmpeg -hwaccels` 可见 `cuda`               |
 | NVDEC / CUVID       | 已具备   | 可见 `h264_cuvid`、`hevc_cuvid` 等           |
 | NVENC               | 已具备   | 可见 `h264_nvenc`、`hevc_nvenc`、`av1_nvenc` |
-| TensorRT Python     | 未具备   | `import tensorrt` 不存在                     |
-| ONNX / ONNX Runtime | 未具备   | 当前镜像未安装                               |
-| trtexec             | 未具备   | 当前镜像未发现                               |
+| TensorRT Python     | 早期未具备 | 当时 `import tensorrt` 不存在               |
+| ONNX / ONNX Runtime | 早期未具备 | runtime 不应包含 ONNX 构建依赖              |
+| trtexec             | 早期未具备 | `trtexec` 属于 build 镜像                   |
 
-结论：现有 `0.3.0` 镜像可验证 NVDEC/NVENC，但 TensorRT 主线需要新的性能实验镜像。
+结论更新：这段保留为早期能力探针记录。0.3.0 正式 runtime 镜像已经包含 TensorRT Python runtime；ONNX、PyTorch 和 `trtexec` 仍留在 build 镜像中。
 
 当前服务器已经构建 `video2x:trt` 实验镜像，并完成 `realesr-general-x4v3` 的 ONNX 与 TensorRT FP16 engine 验证：
 

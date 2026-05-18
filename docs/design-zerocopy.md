@@ -10,11 +10,11 @@
 输入视频 -> 解码 -> 预处理 -> TensorRT 推理 -> 后处理 -> 编码 -> 合并音频 -> 输出 MP4
 ```
 
-本设计文档记录 GPU 直通、NVENC hook、CUDA 后处理、NV12 输出和后续真正 Zero-Copy 的技术路线。
+本设计文档记录 GPU 直通、NVENC hook、CUDA 后处理、NV12 输出和 0.3.0 ZeroCopy 发布验收。
 
 ## 2. 当前结论
 
-截至当前代码状态，**视频像素链路的 Zero-Copy 已经打通并完成热修镜像验证**。
+截至 0.3.0，**视频像素链路的 Zero-Copy 已经打通，并已固化到正式 runtime 镜像**。
 
 当前已验证的业务路线是：
 
@@ -47,8 +47,8 @@ NVDEC CUDA surface -> CUDA/TRT -> NVENC CUDA surface
 仍需明确边界：
 
 - 音频仍通过最终 `ffmpeg -c copy` 合并；这不涉及视频像素搬运。
-- TensorRT 仍会产生完整 x4 输出 tensor，720p direct 仍有 `5120x2880` 中间图；PixelShuffle + Downsample Plugin 尚未实现。
-- 当前 Zero-Copy 输出侧先在热修镜像 `video2x:0.3.0-zerocopy-output-local` 验证，正式流水线镜像尚未固化。
+- TensorRT full x4 engine 仍会产生完整 x4 输出 tensor，720p direct 仍有 `5120x2880` 中间图；PixelShuffle + Downsample Plugin 尚未实现。
+- 0.3.0 正式镜像已固化 ZeroCopy input/output；未完成的是 TensorRT engine 内部的算子级融合。
 
 当前阶段可以命名为：
 
@@ -56,20 +56,21 @@ NVDEC CUDA surface -> CUDA/TRT -> NVENC CUDA surface
 NVDEC CUDA/P010 -> TensorRT FP16 -> CUDA/NV12 AVFrame -> NVENC
 ```
 
-当前主线验收结果：
+正式 runtime 镜像验收结果：
 
-| 输入        | 模式                             | 耗时       | fps       | 输出                                   |
-| ----------- | -------------------------------- | ---------- | --------- | -------------------------------------- |
-| 420p        | Zero-Copy input + output surface | `62.801s`  | `144.949` | `1920x1080 / 9103 frames / HEVC / AAC` |
-| 720p direct | Zero-Copy input + output surface | `205.728s` | `44.248`  | `1920x1080 / 9103 frames / HEVC / AAC` |
+| 输入 | 模式 | fps | 输出 |
+| ---- | ---- | --- | ---- |
+| 420p | ZeroCopy input + output surface | `142.033` | `1920x1080 / 9103 frames / HEVC / AAC` |
+| 720p 性能线 | `960x540 conv48 ZeroCopy` | `77.106` | `1920x1080 / 9103 frames / HEVC / AAC` |
+| 720p 质量线 | `1280x720 conv48 ZeroCopy` | `45.124` | `1920x1080 / 9103 frames / HEVC / AAC` |
 
 阶段判断：
 
 - 视频像素 Zero-Copy 已完成。
 - 720p direct 当前尚未达到 `60fps`；已验证完整样本最好结果约 `45fps`。
 - `960x540` 性能线已达到 `60fps+`，但这是 720p 预缩后的速度路线，不是 720p direct 质量路线。
-- `srvgg-conv48-tail` 是显式开启的 P1 折中路线，不是默认业务路径。
-- `conv48-tail` 的价值是避免最终 RGB x4 大图输出 binding，并为后续 TensorRT Plugin 提供更好的工程边界；它不是 60fps 的最终解。
+- `srvgg-conv48-tail` 已成为 720p 性能线/质量线的当前发布路线。
+- `conv48-tail` 的价值是避免最终 RGB x4 大图输出 binding，并为后续 TensorRT Plugin 提供更好的工程边界；真正根治仍需要算子级融合。
 
 当前剩余性能空间：
 
@@ -655,12 +656,12 @@ frame=0 format=cuda sw_format=p010le width=720 height=420 linesize=1536/1536
 chw_probe dtype=fp16 bytes=1814400 checksum=429226993
 ```
 
-结论更新：
+历史探针结论：
 
 - Zero-Copy 输入半边的关键风险已经降低：`NVDEC CUDA surface -> CUDA preprocess -> TensorRT input buffer` 有可行路径。
 - Python TensorRT binding 已经能接收该 bridge 写入的 device buffer 并完成 `execute_async_v3`。
-- 下一步不是继续从 ffmpeg stdout 读 RGB，而是把 bridge 从“第一帧探针”扩展成持续帧循环，并接入现有 CUDA postprocess。
-- 这仍然不是完整业务 Zero-Copy，因为当前 `src/worker.py` 尚未接入该解码入口，输出侧也仍未做到 `TRT/CUDA -> NVENC surface`。
+- 当时下一步不是继续从 ffmpeg stdout 读 RGB，而是把 bridge 从“第一帧探针”扩展成持续帧循环，并接入现有 CUDA postprocess。
+- 这段记录的是输入侧探针阶段；0.3.0 正式 runtime 已经完成输出侧 `TRT/CUDA -> NVENC surface` 接入。
 
 TensorRT 输入半边最小闭环：
 
@@ -743,7 +744,7 @@ sample_d2h=0.005s
 - `decode_to_trt_input` 已经包括 NVDEC 解码、P010 surface 读取和 `P010 -> NCHW FP16` kernel。
 - 该项在 300 帧中只有 `0.09s` / `0.077s`，说明输入侧 host 往返消除后成本很低。
 - 当前 probe 每帧同步 postprocess，没有做双缓冲，所以 720p 的 `35.761 fps` 不是最终上限。
-- 真正工程化应把该 bridge 接入现有 pipeline slot，让 NVDEC、TRT、postprocess、D2H/encode write 再次形成异步流水。
+- 该 bridge 后续已经接入业务 pipeline slot；0.3.0 正式主线为 NVDEC、TRT、CUDA/NV12 postprocess、NVENC 的异步流水。
 
 ### 7.3.1 业务 Runner 接入验证
 
@@ -790,7 +791,7 @@ ffmpeg stdin
 NVENC surface 未直连
 ```
 
-因此它是“ZeroCopy 输入半边已接入业务 runner”，还不是完整 ZeroCopy。
+这是输入半边接入时的历史状态；0.3.0 正式主线已经实现完整视频像素 ZeroCopy，剩余问题转为 TensorRT 内部 x4 中间 tensor 的算子级融合。
 
 300 帧业务 MP4 验证：
 
@@ -992,7 +993,7 @@ audio=aac / 44100Hz / stereo
 - 420p 从输入半边 ZeroCopy 的 `134.569 fps` 提升到输出 surface 路线的 `144.949 fps`。
 - `encode_write` 从输入半边 ZeroCopy 的约 `18-19s / 9103 frames` 降到约 `1.7-1.9s / 9103 frames`。
 - `src/ffprobe.py` 已改为默认不使用 `-count_frames`，避免扫描和验证阶段无意义地扫完整片。
-- 当前热修镜像为 `video2x:0.3.0-zerocopy-output-local`；正式镜像固化前，需要把同样改动纳入 `.beagle/dockerfile` 并跑流水线回归。
+- 该热修验证已经进入正式 `0.3.0` runtime 镜像；发布判断以后以正式镜像回归数据为准。
 
 ### 7.4 阶段 D：业务链路减少 Host 往返
 
@@ -1252,9 +1253,8 @@ NVDEC -> CUDA/NPP -> TensorRT -> CUDA/NPP NV12 -> NVENC
 
 | 优先级 | 方向                               | 目标                                                                   | 判断                                    |
 | ------ | ---------------------------------- | ---------------------------------------------------------------------- | --------------------------------------- |
-| P0     | 本地镜像回归                       | 不挂载源码，用本地 hotfix 镜像复跑 420p/720p、seek、GPU0/GPU1          | 视频像素 Zero-Copy 已通过，继续收口发布 |
-| P0     | 里程碑后发布回归                   | ZeroCopy 阶段验证收口后，再跑 GitHub Actions 流水线镜像                | 不在当前阶段提前触发流水线              |
-| P0     | 画质抽帧评审                       | 固定抽帧点，对比 direct 720p、旧 540p、原片                            | 决定 direct 作为默认主线                |
+| P0     | 正式镜像回归                       | build/runtime 镜像完成后复跑 420p/720p、seek、GPU0/GPU1                | 0.3.0 已完成                            |
+| P0     | 画质抽帧评审                       | 固定抽帧点，对比 direct 720p、性能线、原片                             | 性能线已人工接受，质量线保留            |
 | P1     | SRVGG conv48 tail                  | TRT 保留 final conv，CUDA 融合 `DepthToSpace + residual + resize/NV12` | 完整样本已过 45fps，当前首选折中路线    |
 | P1     | SRVGG full tail fuse               | `prelu_32 + final conv + PixelShuffle + resize/NV12` 一体化             | 数学可行但当前 CUDA 标量卷积低于 30fps  |
 | P1     | TensorRT Plugin 融合               | 把 tail fuse 放进 TRT Plugin，减少 Python/CUDA launch 和大图 binding   | 这是 x4v3 的核心性能上限突破点          |
@@ -1264,9 +1264,8 @@ NVDEC -> CUDA/NPP -> TensorRT -> CUDA/NPP NV12 -> NVENC
 短期建议：
 
 ```text
-先用本地 hotfix 镜像完成 Zero-Copy input/output 回归。
-等 ZeroCopy 阶段形成里程碑后，再统一跑流水线发布镜像。
-随后进入 SRVGG tail fuse / TensorRT Plugin 方案设计。
+0.3.0 已完成 ZeroCopy input/output 正式回归。
+随后进入默认 profile、SRVGG tail fuse / TensorRT Plugin 和 C++ runner 方案设计。
 ```
 
 ### 11.1 SRVGG Tail Fuse 实验
@@ -1433,50 +1432,37 @@ SSIM All=0.986860
 - 当前策略：需要 `60fps+` 时使用 `960x540 conv48 Zero-Copy`；需要最大输入细节时保留 `720p direct conv48 Zero-Copy` 质量线。
 - 收口结论：本阶段不再继续硬冲 `1280x720 direct` 到 `60fps`。`60fps+` 里程碑按 `960x540 conv48 Zero-Copy` 记录，后续优化转向默认策略、发布回归和更底层 Plugin/C++ runner。
 
-本地 hotfix 镜像验证：
+### 11.4 0.3.0 正式发布验收
+
+build 镜像：
 
 ```text
-image=video2x:0.3.0-pipeline2-local
-base=registry.cn-qingdao.aliyuncs.com/wod/video2x:0.3.0
-说明：只覆盖 /app/src 和 postprocess.ptx，不挂载源码运行；用于验证镜像内置代码路径。
+registry.cn-qingdao.aliyuncs.com/wod/video2x:0.3.0-build
+image_id=sha256:17b8158ed4279286af79fd103aaf296a317a3e698c605d7065b9604af7b80597
+created=2026-05-18T09:37:50Z
 ```
 
-本地镜像完整样本：
+runtime 镜像：
 
 ```text
-420p:
-/data/jasna/420p/SDMT-506-U-420p_1080p_imageprobe_full.mp4
-frames=9103
-elapsed=70.512s
-fps=129.098
-关键帧数量=152
-moov=32
-
-720p direct:
-/data/jasna/720p/INU-047-U-720p_1080p_imageprobe_full.mp4
-frames=9103
-elapsed=205.160s
-fps=44.370
-关键帧数量=152
-moov=32
+registry.cn-qingdao.aliyuncs.com/wod/video2x:0.3.0
+image_id=sha256:7a479268842a70e4f2c465891ee11afdcf1214abcddc0dd3d79792311a5f0f4d
+digest=sha256:7d3a297ec1f01a723af7c5acabe231a3bd424566956f7213009d44af10580277
+created=2026-05-18T14:49:45Z
+size=3662710760
 ```
 
-本地镜像双卡并发：
+正式样本：
+
+| 路线 | 输出 | fps |
+| ---- | ---- | --- |
+| 420p ZeroCopy | `/data/jasna/420p/SDMT-506-U-420p_1080p_release_zc_420p.mp4` | `142.033` |
+| 720p 性能线 | `/data/jasna/720p/INU-047-U-720p_1080p_release_960conv48_zc.mp4` | `77.106` |
+| 720p 质量线 | `/data/jasna/720p/INU-047-U-720p_1080p_release_direct_conv48_zc.mp4` | `45.124` |
 
 ```text
-420p GPU0:
-/data/jasna/420p/SDMT-506-U-420p_1080p_imageprobe_parallel.mp4
-frames=9103
-elapsed=68.705s
-fps=132.494
-关键帧数量=152
-moov=32
-
-720p direct GPU1:
-/data/jasna/720p/INU-047-U-720p_1080p_imageprobe_parallel.mp4
-frames=9103
-elapsed=201.792s
-fps=45.111
-关键帧数量=152
-moov=32
+ffprobe:
+1920x1080 / 30fps / 9103 frames / HEVC / AAC
+keyframes=152
+moov_offset_first_4k=32
 ```

@@ -14,25 +14,56 @@
 - 成功标准是什么。
 - 如果不达标，下一步分支是什么。
 
+## 0. 0.3.0 里程碑状态
+
+0.3.0 已经完成 build/runtime 镜像发布和服务器回归，可以进入发版状态。
+
+正式回归结果：
+
+| 路线 | 完整 5 分钟样本 fps | 输出 |
+| ---- | ------------------- | ---- |
+| 420p ZeroCopy | `142.033` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p `960x540 conv48` 性能线 | `77.106` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p `1280x720 conv48` 质量线 | `45.124` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+
+三条输出均验证 `keyframes=152`、`moov_offset_first_4k=32`，可拖拽播放。
+
+当前发布判断：
+
+- [x] Docker runtime 镜像可构建并发布。
+- [x] build 镜像可构建并生成/复用标准 engine。
+- [x] NVIDIA GPU / CDI / NVENC hook 路线通过。
+- [x] 输出 1080p、HEVC、音频保留、faststart。
+- [x] 420p 和 720p 样本都超过实时 30fps。
+- [x] 720p 性能线超过 60fps。
+- [x] `RealESRGAN_x2plus` 已淘汰为速度主线，只保留质量参考。
+
+下一阶段：
+
+- [ ] 默认 profile 收敛：`performance` / `quality` 自动选择。
+- [ ] TensorRT Plugin：融合 PixelShuffle + Downsample。
+- [ ] C++ runner：降低 Python/ctypes 调度边界。
+- [ ] FlashVSR 竞品验证。
+
 ## 2. 第一阶段：最小可运行容器
 
 第一阶段目标是让用户只挂载 `/data` 和 `/models` 后，容器可以自动扫描并正式处理视频。
 
 本阶段重点不是追求最终极限速度，而是先建立完整闭环：
 
-- [ ] Docker 镜像可构建。
+- [x] Docker 镜像可构建。
 - [x] Real-ESRGAN Python 源码在本项目内，可调整。
 - [x] 本项目自己的业务代码放在 `src/`。
 - [x] 模型不打包进镜像，运行时从 `/models` 读取或下载。
-- [ ] 容器能识别 NVIDIA GPU。
+- [x] 容器能识别 NVIDIA GPU。
 - [x] 能扫描 `/data` 下所有 `.mp4`。
 - [x] 能读取分辨率、帧率、总帧数。
 - [x] 能跳过 1080p 及以上视频。
-- [x] 能为 720p 视频规划 `outscale=1.5`。
+- [x] 能为 720p 视频选择性能线或质量线 engine。
 - [x] 能为 480p 或更低清视频规划到 1080p 的倍率。
-- [ ] 能输出最终 1080p 文件。
-- [ ] 能保留音频。
-- [ ] 能用 `ffprobe` 校验输出。
+- [x] 能输出最终 1080p 文件。
+- [x] 能保留音频。
+- [x] 能用 `ffprobe` 校验输出。
 
 成功标准：
 
@@ -50,13 +81,13 @@
 
 必须输出：
 
-- [ ] 当前处理文件。
-- [ ] 当前帧数和总帧数。
-- [ ] 实时 fps。
-- [ ] 完成百分比。
-- [ ] 预计剩余时间。
-- [ ] GPU 利用率。
-- [ ] 显存占用。
+- [x] 当前处理文件。
+- [x] 当前帧数和总帧数。
+- [x] 实时 fps。
+- [x] 完成百分比。
+- [x] 预计剩余时间。
+- [x] GPU 利用率。
+- [x] 显存占用。
 
 这一阶段的核心不是优化，而是让问题可见。
 
@@ -84,11 +115,11 @@
 
 测试方式：
 
-- [ ] 使用真实 720p/30fps 样本。
-- [ ] 默认模型为 `RealESRGAN_x2plus`。
-- [ ] 默认倍率为 `outscale=1.5`。
-- [ ] 默认不启用 benchmark，直接正式处理。
-- [ ] 记录正式处理过程中的 fps、ETA、GPU 利用率和显存。
+- [x] 使用真实 720p/30fps 样本。
+- [x] 速度主线为 `realesr-general-x4v3` TensorRT/ZeroCopy。
+- [x] 性能线使用 `960x540 conv48`，质量线使用 `1280x720 conv48`。
+- [x] 默认不启用 benchmark，直接正式处理。
+- [x] 记录正式处理过程中的 fps、ETA、GPU 利用率和显存。
 
 成功标准：
 
@@ -124,7 +155,7 @@
 - [ ] `RealESRGAN_x2plus` + 自动倍率
 - [ ] `RealESRGAN_x4plus` + 自动倍率
 - [x] `realesr-general-x4v3` + 自动倍率，当前 420p PyTorch 基线为 `4.583 fps`
-- [ ] `realesr-general-x4v3` + TensorRT FP16 视频闭环
+- [x] `realesr-general-x4v3` + TensorRT FP16 视频闭环
 - [ ] 必要时评估分阶段或其他模型策略
 
 成功标准：
@@ -177,7 +208,7 @@ Review Checkpoint：
 - [x] 对 420p 样本逐帧推理。
 - [x] 分段记录解码、预处理、TRT 推理、后处理、编码、音频合并耗时。
 - [x] 输出标准 1920x1080。
-- [ ] 使用 NVENC 编码视频。
+- [x] 使用 NVENC 编码视频。
 - [x] 保留或重新合并原始音频。
 - [x] 校验输出宽高、帧率、时长、音频。
 - [x] 记录端到端 fps、GPU 利用率、显存、CPU 占用。
@@ -201,7 +232,7 @@ Review Checkpoint：
 - [x] 将成品编码改为 `libx265 + 5M`，300 帧短样本 `34.554 fps`，输出约 `5.23Mbps`。
 - [ ] 抽帧对比 720p 预缩 540p 路线与 720p x4 路线，确认画质是否可接受。
 - [ ] 抽帧对比 PyTorch 输出，确认人脸、字幕、边缘和噪声没有明显劣化。
-- [ ] 修复 NVENC 后重新测试端到端速度。
+- [x] 修复 NVENC 后重新测试端到端速度。
 
 如果不达标：
 
@@ -244,17 +275,17 @@ NVDEC -> GPU surface / CUDA memory -> TRT FP16 inference -> CUDA/NPP postprocess
 
 Review Checkpoint：
 
-- [ ] 确认 FFmpeg 镜像具备 `cuda` hwaccel。
-- [ ] 确认具备 `h264_cuvid` / `hevc_cuvid`。
-- [ ] 确认具备 `h264_nvenc` / `hevc_nvenc`，并修复当前 `OpenEncodeSessionEx failed: unsupported device (2)`。
+- [x] 确认 FFmpeg 镜像具备 `cuda` hwaccel。
+- [x] 确认具备 `h264_cuvid` / `hevc_cuvid`。
+- [x] 确认具备 `h264_nvenc` / `hevc_nvenc`，并通过 NVENC hook 修复容器内 session 问题。
 - [x] 验证 Desktop GStreamer 1.28.2 包可提供 `cudaupload`、`cudascale`、`cudadownload`。
 - [x] 验证 `2880x1680 -> 1920x1080` CUDA 后处理 153 帧约 `3s`，明显快于 Python/OpenCV `14.410s`。
 - [x] 验证 GStreamer `appsrc` 按完整帧接入 TRT 输出，端到端提升到 `8.163 fps`。
-- [ ] 验证 720p 输入可以硬解码、硬编码。
-- [ ] 验证 420p 输入可用 NPP/CUDA 补边或缩放到 1920x1080。
+- [x] 验证 720p 输入可以硬解码、硬编码。
+- [x] 验证 420p 输入可用 CUDA 补边或缩放到 1920x1080。
 - [x] 将 TRT 输出接入 GStreamer `appsrc`，按完整帧 push GstBuffer，避免裸 `fdsrc` 的 65536 字节分块问题。
-- [ ] 消除 `trt_to_appsrc_push=11.378s` 的大图 CPU 拷贝，改为 CUDA device memory/NPP/自定义 kernel 路线。
-- [ ] 统计 CPU/GPU 往返拷贝次数。
+- [x] 消除 `trt_to_appsrc_push=11.378s` 的大图 CPU 拷贝，改为 CUDA device memory / FFmpeg CUDA AVFrame 路线。
+- [x] 统计并消除主线视频像素 CPU/GPU 往返拷贝。
 
 成功标准：
 
@@ -311,7 +342,7 @@ Review Checkpoint：
 - [x] 支持 `2880x1680 -> 1920x1080`。
 - [x] 支持居中补边，输出标准 `1920x1080`。
 - [x] 输出可以选择 RGB，用于先回 CPU 验证画质。
-- [ ] 输出可以选择 NV12，用于后续直接接 NVENC。
+- [x] 输出可以选择 NV12，用于后续直接接 NVENC。
 - [x] 单独记录 kernel/NPP 耗时。
 
 成功标准：
@@ -459,17 +490,17 @@ docker run --rm --gpus all \
 
 容器应该自动：
 
-- [ ] 扫描视频。
-- [ ] 打印任务清单。
-- [ ] 选择模型和倍率。
-- [ ] 开始正式处理。
-- [ ] 显示速度和预计剩余时间。
-- [ ] 校验输出。
+- [x] 扫描视频。
+- [x] 打印任务清单。
+- [x] 选择已有 TensorRT engine 和处理模式。
+- [x] 开始正式处理。
+- [x] 显示速度和预计剩余时间。
+- [x] 校验输出。
 - [ ] 给出普通用户能理解的错误信息。
 
 成功标准：
 
-用户不需要知道 `RealESRGAN_x2plus`、`outscale`、`tile` 或 ffmpeg 参数，也能完成批处理。
+用户不需要知道 `RealESRGAN_x2plus`、`outscale`、`tile`、TensorRT engine 或 ffmpeg 参数，也能完成批处理。
 
 如果不达标：
 
@@ -481,15 +512,15 @@ docker run --rm --gpus all \
 
 发布前必须回归：
 
-- [ ] 720p/30fps 到 1080p。
-- [ ] 420p/30fps 到 1080p。
+- [x] 720p/30fps 到 1080p。
+- [x] 420p/30fps 到 1080p。
 - [ ] 标准 480p/30fps 到 1080p。
 - [ ] 1080p 及以上跳过。
 - [ ] 已存在输出跳过。
 - [ ] 模型缺失时的错误提示。
 - [ ] GPU 不可用时的错误提示。
-- [ ] 输出文件可被 `ffprobe` 读取。
-- [ ] 日志包含 fps、ETA、GPU 利用率和显存。
+- [x] 输出文件可被 `ffprobe` 读取。
+- [x] 日志包含 fps、ETA、GPU 利用率和显存。
 
 发布判断：
 

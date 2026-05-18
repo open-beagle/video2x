@@ -27,10 +27,10 @@ models
 当前默认运行路线是：
 
 ```text
-realesr-general-x4v3 -> ONNX -> TensorRT FP16 engine -> TRT-CUDA 视频处理
+realesr-general-x4v3 -> ONNX -> TensorRT FP16 engine -> ZeroCopy TRT-CUDA 视频处理
 ```
 
-运行 `0.3.0` 默认主线建议准备标准输入规格 engine：
+运行 `0.3.0` 建议准备标准输入规格 engine：
 
 ```text
 models/realesr-general-x4v3-640x360-fp16.engine
@@ -38,6 +38,20 @@ models/realesr-general-x4v3-720x480-fp16.engine
 models/realesr-general-x4v3-854x480-fp16.engine
 models/realesr-general-x4v3-960x540-fp16.engine
 models/realesr-general-x4v3-1280x720-fp16.engine
+```
+
+如果启用 `VIDEO_POSTPROCESS_MODE=srvgg-conv48-tail`，还需要对应 conv48 engine：
+
+```text
+models/realesr-general-x4v3-960x540-conv48-fp16.engine
+models/realesr-general-x4v3-1280x720-conv48-fp16.engine
+```
+
+0.3.0 正式回归中的两条 720p 路线：
+
+```text
+性能线：1280x720 源视频 -> 960x540 conv48 engine -> 1920x1080，77.106fps
+质量线：1280x720 源视频 -> 1280x720 conv48 engine -> 1920x1080，45.124fps
 ```
 
 其中 `720x420` 不是标准分辨率，只是当前样本兼容规格；如果仍要处理该类样本，可以额外保留：
@@ -57,14 +71,29 @@ realesr-general-x4v3.pth
 realesr-general-wdn-x4v3.pth
 RealESRGAN_x2plus.pth
 RealESRGAN_x4plus.pth
-realesr-general-x4v3-720x420.onnx
-realesr-general-x4v3-720x420.onnx.data
-realesr-general-x4v3-720x420-fp16.engine
-realesr-general-x4v3-960x540-fp16.engine
-realesr-general-x4v3-1280x720-fp16.engine
 ```
 
 其中运行默认只读取 `.engine`。`.pth`、`.onnx` 和 `.onnx.data` 用于模型转换、重建 engine、画质对比和后续实验。
+
+build 镜像会为所有已存在且受支持的 `.pth` 扫描构建：
+
+```text
+640x360
+720x480
+854x480
+960x540
+1280x720
+720x420
+```
+
+对 `realesr-general-x4v3` 和 `realesr-general-wdn-x4v3`，还会额外生成：
+
+```text
+{model}-{width}x{height}-conv48.onnx
+{model}-{width}x{height}-conv48.onnx.data
+{model}-{width}x{height}-conv48-fp16.engine
+{model}-tail-{width}x{height}-conv48.npz
+```
 
 ## 4. 本地下载源权重
 
@@ -115,6 +144,8 @@ docker run --rm \
   -v /path/to/models:/models \
   video2x:0.3.0-build
 ```
+
+0.3.0 正式 build 镜像已在 RTX 4090 服务器通过零参数回归，确认全部支持模型 engine 可生成或复用，general v3 / wdn general v3 的 conv48 profile 已补齐。
 
 不要默认使用 INT8。超分是像素级回归任务，INT8 可能带来断层、网格和细节异常，只能作为单独画质验证分支。
 

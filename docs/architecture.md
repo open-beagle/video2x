@@ -2,6 +2,29 @@
 
 ![video2x 技术架构图](images/video2x-architecture.svg)
 
+## 0. 0.3.0 发布状态
+
+`0.3.0` 已完成 build/runtime 镜像发布和服务器回归。当前主线不是早期的 PyTorch `RealESRGAN_x2plus + outscale=1.5`，而是：
+
+```text
+NVDEC CUDA/P010
+-> CUDA P010 to NCHW FP16
+-> TensorRT FP16
+-> CUDA/NV12 AVFrame
+-> NVENC HEVC
+-> faststart MP4 + audio copy
+```
+
+正式回归结果：
+
+| 路线 | 输出 | 完整 5 分钟样本 fps |
+| ---- | ---- | ------------------- |
+| 420p ZeroCopy | `720x420 -> 1920x1080` | `142.033` |
+| 720p 性能线 | `1280x720 -> 960x540 conv48 -> 1920x1080` | `77.106` |
+| 720p 质量线 | `1280x720 conv48 -> 1920x1080` | `45.124` |
+
+三条输出均通过 `ffprobe`：`1920x1080 / 30fps / 9103 frames / HEVC / AAC`，`keyframes=152`，`moov_offset_first_4k=32`。
+
 ## 1. 目标场景
 
 输入视频：
@@ -14,9 +37,10 @@
 输出目标：
 
 - 最终高度：1080p
-- AI 超分倍率：`1080 / 720 = 1.5`
+- 最终有效倍率：`1080 / 720 = 1.5`
 - 硬件：单张 RTX 4090
-- 性能目标：接近或达到 `30fps` 处理吞吐，让 2 小时视频尽量在 2 小时内完成，甚至更短。
+- 基础性能目标：超过 `30fps`，让 2 小时视频可以在 2 小时内完成。
+- 0.3.0 性能线目标：720p 样本达到 `60fps+`，当前正式镜像为 `77.106fps`。
 
 关键判断：
 
@@ -30,8 +54,9 @@
 
 核心变化：
 
-- 不再走 `x4 -> 2880p` 的低效路线。
-- 720p 直接按最终目标 `outscale=1.5` 输出 1080p。
+- 不再使用 CPU raw RGB / ffmpeg stdin 作为高性能主线。
+- 运行镜像只读取预构建 TensorRT engine，不在 runtime 导出 ONNX 或构建 engine。
+- 720p 有两条明确路线：`960x540 conv48 ZeroCopy` 性能线和 `1280x720 conv48 ZeroCopy` 质量线。
 - 处理时持续观察 fps、预计剩余时间、GPU 利用率和显存占用。
 - 如果 GPU 利用率长期偏低，就把它当成架构缺陷处理，而不是接受结果。
 
@@ -60,12 +85,13 @@ Progress:
   input: /data/movie.mp4
   input: 1280x720, 30fps, 216000 frames
   output: /data/movie_1080p.mp4
-  model: RealESRGAN_x2plus
-  outscale: 1.5
+  model: realesr-general-x4v3
+  engine: realesr-general-x4v3-960x540-conv48-fp16.engine
+  mode: ZeroCopy / srvgg-conv48-tail
   frames: 64800 / 216000
   progress: 30.00%
-  speed: 32.4 fps
-  estimated remaining: 1h 09m
+  speed: 77.1 fps
+  estimated remaining: 32m 42s
   gpu: 94%
   memory: 18.6GB / 24GB
 ```
@@ -92,9 +118,9 @@ Progress:
 
 本项目能挑战 2 小时内完成的依据不是“4090 很强”这句话，而是以下架构约束：
 
-- 砍掉旧路线中 `720p -> 2880p` 的无效 AI 计算。
-- 默认使用 CUDA/PyTorch 路线，而不是 CPU 推理。
-- 以最终 1080p 为目标计算 `outscale`，不做多余倍率。
+- 砍掉旧路线中 `720p -> 2880p -> CPU resize/encode` 的低效视频链路。
+- 默认使用 TensorRT/ZeroCopy 路线，而不是 CPU 推理或官方 PyTorch 视频脚本。
+- 以最终 `1920x1080` 为输出目标，避免输出大于目标后再由 CPU 处理。
 - 启动前自动识别任务，避免错误处理已达标视频。
 - 运行中强制暴露 fps、ETA、GPU 利用率和显存。
 - 一旦 4090 没有被充分释放，就把解码、编码、IO、Python 调度纳入瓶颈排查。

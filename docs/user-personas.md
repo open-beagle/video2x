@@ -2,7 +2,7 @@
 
 ## 1. 核心用户
 
-本项目的核心用户不是 AI 工程师，也不需要理解 Real-ESRGAN、模型倍率、CUDA、PyTorch 或视频编码细节。
+本项目的核心用户不是 AI 工程师，也不需要理解 Real-ESRGAN、TensorRT engine、CUDA、ZeroCopy 或视频编码细节。
 
 用户的真实需求很简单：
 
@@ -32,15 +32,15 @@ docker run --rm --gpus all \
 - 自动查找所有 `.mp4` 文件。
 - 自动判断每个视频的分辨率、帧率、总帧数。
 - 自动决定是否需要处理。
-- 自动选择处理方案。
+- 自动选择已有 TensorRT engine 和处理方案。
 - 自动输出到原视频同目录。
 
 用户不应该必须知道：
 
 - 该选哪个模型。
-- `outscale` 应该是多少。
-- 720p 到 1080p 为什么是 `1.5`。
-- 480p 到 1080p 为什么是 `2.25`。
+- 该选哪个 engine。
+- 720p 为什么有性能线和质量线。
+- ZeroCopy、NVDEC、NVENC 是什么。
 - `tile` 是什么。
 - ffmpeg 如何保留音频。
 
@@ -59,9 +59,8 @@ docker run --rm --gpus all \
 - 是否已有输出文件。
 - 是否已经达到 1080p。
 - 预计输出路径。
-- 推荐模型。
-- 推荐 `outscale`。
-- 推荐 `tile`。
+- 推荐 engine。
+- 推荐处理模式。
 - 预计处理耗时。如果没有历史速度数据，显示为运行后估算。
 
 示例日志：
@@ -72,16 +71,16 @@ Scan result:
    input: 1280x720, 30fps, 216000 frames
    output: /data/a_1080p.mp4
    action: upscale
-   model: RealESRGAN_x2plus
-   outscale: 1.5
-   estimated time: after start
+   engine: realesr-general-x4v3-960x540-conv48-fp16.engine
+   mode: performance / ZeroCopy
+   estimated speed: 77fps class
 
 2. /data/b.mp4
    input: 854x480, 30fps, 216000 frames
    output: /data/b_1080p.mp4
    action: upscale
-   model: auto
-   outscale: 2.25
+   engine: auto
+   mode: standard profile
    estimated time: after start
 
 3. /data/c_1080p.mp4
@@ -114,8 +113,8 @@ Progress:
   input: /data/a.mp4
   frames: 2400 / 216000
   progress: 1.11%
-  speed: 8.2 fps
-  estimated remaining: 7h 14m
+  speed: 77.1 fps
+  estimated remaining: 46m 40s
   gpu: 92%, memory: 11.2GB / 24GB
 ```
 
@@ -127,10 +126,10 @@ Progress:
 
 优化目标：
 
-- 尽量减少错误倍率带来的无效计算。
-- 720p 到 1080p 不允许先 AI 计算到 2880p。
+- 尽量减少错误 engine、错误倍率和 CPU 往返带来的无效计算。
+- 720p 到 1080p 不允许完整 x4 大图回到 CPU 再处理。
 - 480p 到 1080p 必须单独验证模型、质量和速度。
-- 默认使用 CUDA/PyTorch 推理。
+- 默认使用 TensorRT/ZeroCopy 推理链路。
 - 避免因为 Python、ffmpeg、磁盘 IO 或串行流程让 GPU 长时间空闲。
 - 日志中应能看出实际 fps、预计剩余时间、GPU 利用率和显存占用。
 
@@ -140,12 +139,12 @@ Progress:
 
 最终交付形式是 Docker 镜像。
 
-用户不需要本机安装 Python、PyTorch、Real-ESRGAN 或 ffmpeg。用户只需要：
+用户不需要本机安装 Python、PyTorch、Real-ESRGAN、TensorRT 或 ffmpeg。用户只需要：
 
 - 安装 Docker。
 - 配好 NVIDIA GPU 容器运行环境。
 - 准备输入视频目录。
-- 准备或挂载模型目录。
+- 准备或挂载已经由 build 镜像生成过 engine 的模型目录。
 - 运行容器。
 
 容器内部负责：

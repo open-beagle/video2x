@@ -192,13 +192,13 @@ TensorRT engine 强依赖：
 
 ## 10. 720p 质量路线问题
 
-当前 720p 性能路线是：
+当前 720p 性能线是：
 
 ```text
 1280x720 -> 960x540 -> x4 -> 3840x2160 -> 1920x1080
 ```
 
-这条路线速度达标，但它确实是性能折中。问题根源不是 720p 本身，而是 `realesr-general-x4v3` 固定 x4 输出：
+这条路线在 0.3.0 正式镜像中已经达到 `77.106fps`，人工画质评审可接受，因此作为当前发布性能线保留。它仍是性能折中；问题根源不是 720p 本身，而是 `realesr-general-x4v3` 固定 x4 输出：
 
 ```text
 1280x720 -> x4 -> 5120x2880
@@ -242,8 +242,8 @@ TensorRT engine 强依赖：
 
 阶段判断：
 
-- 540p profile 只能作为当前速度达标路线。
-- 720p 质量主线不应长期依赖先压到 540p。
+- `960x540 conv48` profile 是 0.3.0 当前可发布的 60fps+ 性能线。
+- 720p 质量线保留 `1280x720 conv48` direct engine，0.3.0 正式镜像为 `45.124fps`。
 - 不寻找不存在的 `realesr-general-x2v3` 捷径。general-v3 主线只有 x4 权重，推理时伪装 x2 不能从网络结构上消除 PixelShuffle 膨胀。
 - 下一阶段应优先验证 720p direct FP16 engine 的 GPU fused postprocess 和显存峰值，随后推进 TensorRT Plugin 融合 PixelShuffle + Downsample，目标是不牺牲输入细节。
 
@@ -397,19 +397,49 @@ SSIM All=0.993061
 - [x] 运行镜像只读取 `.engine`。
 - [x] build 镜像负责 `.pth -> .onnx -> .engine`。
 - [x] `720x420` 被降级为样本兼容 profile。
-- [ ] 标准 profile engine 全部构建完成。
-- [ ] 使用标准 profile 回归 360p、480p、720p 样本。
-- [x] 明确 `960x540` 只是 720p 性能折中。
+- [x] 标准 profile engine 全部构建完成或由 build 镜像确认可复用。
+- [x] 使用正式镜像回归 420p 样本和 720p 样本。
+- [x] 明确 `960x540 conv48` 是 720p 当前 60fps+ 性能线。
 - [x] build 镜像默认导出 FP16 ONNX。
 - [x] runtime CUDA 后处理支持 FP16 TRT 输出。
-- [ ] 验证 720p direct FP16 engine 的 GPU fused postprocess，避免长期依赖 540p 预缩。
+- [x] 验证 720p direct conv48 ZeroCopy 质量线，正式镜像 `45.124fps`。
 - [x] 审查 `1280x720` ONNX 末端图结构，定位 PixelShuffle / DepthToSpace 边界。
 - [x] 完成 fused tail CUDA 原型：融合最后 Conv、PixelShuffle、nearest residual、Downsample、NV12 输出。
 - [x] 验证 fused tail 原型输出与当前 CUDA resize 路线的画质一致性。
 - [ ] 优化 fused tail：避免按目标像素重复执行 `3x3x64` tail conv。
 - [ ] 设计 TensorRT Plugin：融合最后 Conv + PixelShuffle + Downsample。
 
-## 13. 运行命令
+## 13. 0.3.0 发布验收
+
+build 镜像：
+
+```text
+registry.cn-qingdao.aliyuncs.com/wod/video2x:0.3.0-build
+image_id=sha256:17b8158ed4279286af79fd103aaf296a317a3e698c605d7065b9604af7b80597
+created=2026-05-18T09:37:50Z
+```
+
+runtime 镜像：
+
+```text
+registry.cn-qingdao.aliyuncs.com/wod/video2x:0.3.0
+image_id=sha256:7a479268842a70e4f2c465891ee11afdcf1214abcddc0dd3d79792311a5f0f4d
+digest=sha256:7d3a297ec1f01a723af7c5acabe231a3bd424566956f7213009d44af10580277
+created=2026-05-18T14:49:45Z
+size=3662710760
+```
+
+正式样本回归：
+
+| 路线 | engine | fps | 输出 |
+| ---- | ------ | --- | ---- |
+| 420p ZeroCopy | `realesr-general-x4v3-720x420-fp16.engine` | `142.033` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p 性能线 | `realesr-general-x4v3-960x540-conv48-fp16.engine` | `77.106` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+| 720p 质量线 | `realesr-general-x4v3-1280x720-conv48-fp16.engine` | `45.124` | `1920x1080 / 30fps / 9103 frames / HEVC / AAC` |
+
+三条输出均验证 `keyframes=152`、`moov_offset_first_4k=32`，可拖拽播放。
+
+## 14. 运行命令
 
 build 镜像运行时不需要输入任何业务参数。准备好本地 `models/` 目录，容器会扫描并构建所有已存在且受支持的 `.pth`。
 
