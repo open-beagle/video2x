@@ -15,7 +15,7 @@ from planner import (
     scale_for_height,
     should_skip_output,
 )
-from scanner import find_mp4
+from scanner import find_videos
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -93,9 +93,9 @@ def main() -> int:
     print(f"TRT_CUDA_TOOL={trt_cuda_tool}", flush=True)
     print(f"GPU_STATUS={gpu_status()}", flush=True)
 
-    inputs = find_mp4(data_dir, output_suffix)
+    inputs = find_videos(data_dir, output_suffix)
     if not inputs:
-        print("No input .mp4 files found.", flush=True)
+        print("No input .mp4/.mkv files found.", flush=True)
         return 0
 
     tasks: list[Task] = []

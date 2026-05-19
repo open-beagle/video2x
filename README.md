@@ -9,7 +9,7 @@
 - 默认使用 `RUNNER=trt-cuda` 高速路线。
 - 当前主路径为 `realesr-general-x4v3 + TensorRT FP16 + CUDA NV12 + HEVC NVENC`。
 - 标准 480p/720p 路线按固定输入规格 engine 管理，当前 420p/720p 样本到 1080p 已在 RTX 4090 上验证超过 30fps。
-- 递归扫描输入目录中的 `.mp4` 文件。
+- 递归扫描输入目录中的 `.mp4`、`.mkv` 文件。
 - 自动跳过已是 1080p 及以上的视频。
 - 输出文件默认命名为 `*_1080p.mp4`。
 - 支持 benchmark 模式，用短样本估算完整视频耗时。
