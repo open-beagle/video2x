@@ -1687,6 +1687,9 @@ def main() -> int:
         completed = 0
         decode_time = preprocess_time = h2d_time = infer_time = kernel_time = d2h_time = sync_time = encode_time = 0.0
         frame_limit = args.frames or args.expected_frames
+        last_progress_time = time.time()
+        last_progress_frames = 0
+        progress_interval = int(os.environ.get("PROGRESS_INTERVAL", "30"))
 
         def submit_slot(slot: PipelineSlot) -> None:
             nonlocal h2d_time, preprocess_time, infer_time, kernel_time, d2h_time, submitted
@@ -1849,7 +1852,7 @@ def main() -> int:
             submitted += 1
 
         def finish_slot(slot: PipelineSlot) -> None:
-            nonlocal sync_time, encode_time, frames, completed
+            nonlocal sync_time, encode_time, frames, completed, last_progress_time, last_progress_frames
             if not slot.pending:
                 return
             t0 = time.perf_counter()
@@ -1869,6 +1872,23 @@ def main() -> int:
             slot.pending = False
             frames += 1
             completed += 1
+
+            now = time.time()
+            if now - last_progress_time >= progress_interval:
+                elapsed_interval = now - last_progress_time
+                frames_interval = frames - last_progress_frames
+                fps_interval = frames_interval / elapsed_interval if elapsed_interval > 0 else 0
+                pct = (frames / frame_limit * 100) if frame_limit else 0
+                eta_str = ""
+                if fps_interval > 0 and frame_limit:
+                    eta_sec = (frame_limit - frames) / fps_interval
+                    eta_str = f", ETA: {time.strftime('%H:%M:%S', time.gmtime(eta_sec))}"
+                print(
+                    f"Progress: {frames}/{frame_limit} ({pct:.1f}%), Speed: {fps_interval:.2f} fps{eta_str}",
+                    flush=True,
+                )
+                last_progress_time = now
+                last_progress_frames = frames
 
         try:
             while True:

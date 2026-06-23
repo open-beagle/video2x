@@ -72,6 +72,16 @@ IMAGE_TAG=latest bash .beagle/build.sh
 video2x:0.3.0-build
 ```
 
+使用构建镜像生成 TensorRT Engine：
+
+```bash
+docker run --rm \
+  --device nvidia.com/gpu=0 \
+  -v /path/to/models:/models \
+  video2x:0.3.0-build
+```
+
+
 ## 文档
 
 - [项目目标](docs/goals.md)
